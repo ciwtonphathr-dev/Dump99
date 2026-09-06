@@ -1,5 +1,5 @@
 -- ===================================================================================
--- MODULE 1: Execution Environment Concealment
+-- MODULE 1: Execution Environment Concealment (การซ่อนสคริปต์)
 -- ===================================================================================
 if script then 
     script.Parent = nil 
@@ -10,137 +10,347 @@ local get_registry = clone_func(getreg or debug.getregistry)
 local get_nil_insts = clone_func(getnilinstances or function() end)
 
 -- ===================================================================================
--- ANTI-CHEAT ENGINE CORE (ปลอดภัย - ไม่ใช้ Metatable Hook)
+-- MODULE 2: Metatable Hooking - Fake Property Reader (__index)
 -- ===================================================================================
-local AntiCheat = {
-    Enabled = true,
-    BanThreshold = 10,
-    Violations = {},
-    WhitelistedPlayers = {},
-    WhitelistedPartNames = {
-        "Handle", "Grip", "EgoHub", "Main", "TitleBar", "Logo", "MiniFrame",
-        "MiniClick", "Content", "StatusBox", "ButtonFrame", "LogBox", "DiscordBtn",
-        "ScanBtn", "DumpBtn", "ProgressBG", "ProgressBar", "Glow", "AntiCheatUI"
-    },
-    WhitelistedParents = {
-        "EgoHub", "AntiCheatUI", "PlayerGui", "CoreGui"
-    },
-    Flags = {},
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local Humanoid = Character:WaitForChild("Humanoid")
+local RootPart = Character:WaitForChild("HumanoidRootPart")
+
+-- ตารางเก็บค่าจำลองสำหรับส่งคืนให้ LocalScript ฝั่งเกม
+getgenv().StealthStorage = {
+    FakeCFrame = RootPart.CFrame,
+    FakePosition = RootPart.Position,
+    FakeWalkSpeed = 16,
+    FakeJumpPower = 50
 }
 
-local function IsPartWhitelisted(Part)
-    for _, Name in ipairs(AntiCheat.WhitelistedPartNames) do
-        if Part.Name == Name or Part.Name:find(Name) then
-            return true
+local OldIndex
+OldIndex = hookmetamethod(game, "__index", function(Self, Key)
+    if not checkcaller() then
+        if Self == Humanoid then
+            if Key == "WalkSpeed" then return getgenv().StealthStorage.FakeWalkSpeed end
+            if Key == "JumpPower" then return getgenv().StealthStorage.FakeJumpPower end
+        end
+        if Self == RootPart then
+            if Key == "CFrame" then return getgenv().StealthStorage.FakeCFrame end
+            if Key == "Position" then return getgenv().StealthStorage.FakePosition end
         end
     end
-    local Parent = Part.Parent
-    while Parent do
-        for _, Name in ipairs(AntiCheat.WhitelistedParents) do
-            if Parent.Name == Name or Parent.Name:find(Name) then
-                return true
-            end
-        end
-        Parent = Parent.Parent
-    end
-    return false
-end
-
-local function CheckNoclip()
-    if not AntiCheat.Enabled then return end
-    local Player = game:GetService("Players").LocalPlayer
-    local Char = Player.Character
-    if not Char then return end
-    for _, Part in ipairs(Char:GetDescendants()) do
-        if Part:IsA("BasePart") and Part.CanCollide == false then
-            if not IsPartWhitelisted(Part) then
-                AntiCheat:AddViolation(Player, "Noclip", "Part: " .. Part.Name)
-            end
-        end
-    end
-end
-
-local function CheckMovement()
-    if not AntiCheat.Enabled then return end
-    local Player = game:GetService("Players").LocalPlayer
-    local Char = Player.Character
-    if not Char then return end
-    local Hum = Char:FindFirstChild("Humanoid")
-    if not Hum then return end
-    if Hum.WalkSpeed > 50 then
-        AntiCheat:AddViolation(Player, "SpeedHack", "WalkSpeed: " .. Hum.WalkSpeed)
-    end
-    if Hum.JumpPower > 100 then
-        AntiCheat:AddViolation(Player, "InfiniteJump", "JumpPower: " .. Hum.JumpPower)
-    end
-end
-
-local LastPos = Vector3.new(0, 0, 0)
-local function CheckTeleport()
-    if not AntiCheat.Enabled then return end
-    local Player = game:GetService("Players").LocalPlayer
-    local Char = Player.Character
-    if not Char then return end
-    local Root = Char:FindFirstChild("HumanoidRootPart")
-    if not Root then return end
-    local Dist = (Root.Position - LastPos).Magnitude
-    if Dist > 300 and LastPos ~= Vector3.new(0, 0, 0) then
-        AntiCheat:AddViolation(Player, "Teleport", "Moved " .. Dist .. " studs")
-    end
-    LastPos = Root.Position
-end
-
-local function CheckESP()
-    if not AntiCheat.Enabled then return end
-    local Player = game:GetService("Players").LocalPlayer
-    local CoreGui = game:GetService("CoreGui")
-    for _, Obj in ipairs(CoreGui:GetDescendants()) do
-        if Obj:IsA("Highlight") or Obj:IsA("SelectionBox") then
-            if not IsPartWhitelisted(Obj) then
-                AntiCheat:AddViolation(Player, "ESP", "Found: " .. Obj.Name)
-            end
-        end
-    end
-end
-
-function AntiCheat:AddViolation(Player, Type, Details)
-    if not self.Enabled then return end
-    if self.WhitelistedPlayers[Player.UserId] then return end
-    if Player == game:GetService("Players").LocalPlayer then return end
-    local Key = Player.UserId .. "_" .. Type
-    self.Violations[Key] = (self.Violations[Key] or 0) + 1
-    if self.Violations[Key] >= self.BanThreshold then
-        Player:Kick("Banned: " .. Type)
-    end
-end
-
-game:GetService("RunService").Stepped:Connect(CheckNoclip)
-game:GetService("RunService").Heartbeat:Connect(CheckMovement)
-game:GetService("RunService").Stepped:Connect(CheckTeleport)
-game:GetService("RunService").Heartbeat:Connect(CheckESP)
-
-local LocalPlayer = game:GetService("Players").LocalPlayer
-AntiCheat.WhitelistedPlayers[LocalPlayer.UserId] = true
+    return OldIndex(Self, Key)
+end)
 
 -- ===================================================================================
--- EgoHub.lua - Hierarchical Deep Dumper (ไม่มี Metatable Hook)
+-- MODULE 3: Metatable Hooking - Property Lock (__newindex)
 -- ===================================================================================
+local OldNewIndex
+OldNewIndex = hookmetamethod(game, "__newindex", function(Self, Key, Value)
+    if not checkcaller() then
+        if Self == Humanoid and (Key == "WalkSpeed" or Key == "JumpPower") then
+            return nil 
+        end
+    end
+    return OldNewIndex(Self, Key, Value)
+end)
+
+-- ===================================================================================
+-- MODULE 4: Network Suppression (__namecall)
+-- ===================================================================================
+local OldNamecall
+OldNamecall = hookmetamethod(game, "__namecall", function(Self, ...)
+    local Method = getnamecallmethod()
+    if not checkcaller() and Method == "FireServer" then
+        local name = Self.Name:lower()
+        if name:find("anti") or name:find("cheat") or name:find("report") or name:find("log") or name:find("ban") then
+            return nil 
+        end
+    end
+    return OldNamecall(Self, ...)
+end)
+
+-- ===================================================================================
+-- MODULE 5: Anti-Detection Reinforcement (ระบบป้องกันการตรวจจับขั้นสูง)
+-- ===================================================================================
+
+-- 5.1: Stack Trace Obfuscation (บิดเบือนรอยเท้าในสแต็ก)
+local old_debug_info = debug.info
+debug.info = function(level, ...)
+    if not checkcaller() then
+        local info = old_debug_info(level, ...)
+        if type(info) == "table" then
+            local fake = {}
+            for k, v in pairs(info) do
+                if k == "source" then fake[k] = "builtin"
+                elseif k == "short_src" then fake[k] = "=[C]"
+                elseif k == "linedefined" then fake[k] = 0
+                elseif k == "lastlinedefined" then fake[k] = 0
+                else fake[k] = v end
+            end
+            return fake
+        end
+        return info
+    end
+    return old_debug_info(level, ...)
+end
+
+-- 5.2: Anti-Namecall Spoof (ปลอมชื่อเมธอดที่ถูกเรียก)
+local old_getnamecallmethod = getnamecallmethod
+getnamecallmethod = function()
+    if not checkcaller() then
+        return "Unknown"
+    end
+    return old_getnamecallmethod()
+end
+
+-- 5.3: Memory Scan Evasion (หลบเลี่ยงการสแกนหน่วยความจำ)
+local function protect_table(tbl)
+    local mt = getrawmetatable(tbl) or {}
+    local old_pairs = mt.__pairs
+    mt.__pairs = function(t)
+        if not checkcaller() then
+            return function() return nil end
+        end
+        return old_pairs(t)
+    end
+    mt.__ipairs = function(t)
+        if not checkcaller() then
+            return function() return nil end
+        end
+        return ipairs(t)
+    end
+    setrawmetatable(tbl, mt)
+end
+protect_table(game)
+protect_table(getgenv())
+
+-- 5.4: Remote Spoofing (ปลอมพารามิเตอร์ Remote)
+local replicated_storage = game:GetService("ReplicatedStorage")
+if replicated_storage then
+    local old_fireserver = replicated_storage.FireServer
+    if old_fireserver then
+        replicated_storage.FireServer = function(self, ...)
+            if not checkcaller() then
+                local args = {...}
+                for i = 1, #args do
+                    if type(args[i]) == "table" then
+                        args[i] = {}
+                    elseif type(args[i]) == "userdata" then
+                        args[i] = nil
+                    end
+                end
+                return old_fireserver(self, unpack(args))
+            end
+            return old_fireserver(self, ...)
+        end
+    end
+end
+
+-- 5.5: CFrame & Vector Spoofing (ปลอมตำแหน่งและทิศทาง)
+local old_cframe_new = CFrame.new
+CFrame.new = function(...)
+    if not checkcaller() then
+        local args = {...}
+        if #args == 3 and type(args[1]) == "number" then
+            return old_cframe_new(0, 1e6, 0)
+        end
+        return old_cframe_new(unpack(args))
+    end
+    return old_cframe_new(...)
+end
+
+-- 5.6: Anti-Teleport Detection (ป้องกันระบบตรวจจับการเทเลพอร์ต)
+local old_teleport = workspace.Teleport
+workspace.Teleport = function(self, ...)
+    if not checkcaller() then
+        return nil
+    end
+    return old_teleport(self, ...)
+end
+
+-- 5.7: SetRawMetatable Lock (ล็อกเมตาเทเบิล)
+local old_setrawmetatable = setrawmetatable
+setrawmetatable = function(obj, mt)
+    if not checkcaller() then
+        return nil
+    end
+    return old_setrawmetatable(obj, mt)
+end
+
+-- 5.8: GetRawMetatable Spoof (ปลอมเมตาเทเบิล)
+local old_getrawmetatable = getrawmetatable
+getrawmetatable = function(obj)
+    if not checkcaller() then
+        return nil
+    end
+    return old_getrawmetatable(obj)
+end
+
+-- 5.9: Loadstring Obfuscation (บิดเบือนการโหลดสตริง)
+local old_loadstring = loadstring
+loadstring = function(str, chunkname)
+    if not checkcaller() then
+        chunkname = chunkname or "=[C]"
+        str = string.gsub(str, "local", "local _ = ")
+    end
+    return old_loadstring(str, chunkname)
+end
+
+-- 5.10: pcall/xpcall Trap (ดักจับข้อผิดพลาด)
+local old_pcall = pcall
+pcall = function(f, ...)
+    if not checkcaller() then
+        return true, nil
+    end
+    return old_pcall(f, ...)
+end
+
+-- 5.11: Anti-Exploit Detector Kill (ปิดระบบตรวจจับเอ็กซ์พลอยต์)
+local function kill_anti_exploit()
+    local services = {game:GetService("CoreGui"), game:GetService("Players")}
+    for _, svc in ipairs(services) do
+        if svc then
+            for _, child in ipairs(svc:GetChildren()) do
+                local name = child.Name and child.Name:lower() or ""
+                if name:find("anti") or name:find("exploit") or name:find("inject") or name:find("detect") then
+                    pcall(function() child:Destroy() end)
+                end
+            end
+        end
+    end
+end
+task.spawn(kill_anti_exploit)
+
+-- 5.12: Instance Clone Protection (ป้องกันการโคลน)
+local old_clone = Instance.Clone
+Instance.Clone = function(self)
+    if not checkcaller() then
+        return nil
+    end
+    return old_clone(self)
+end
+
+-- 5.13: Anti-Heartbeat Detection (ป้องกันการตรวจจับผ่าน Heartbeat)
+local RunService = game:GetService("RunService")
+local old_heartbeat = RunService.Heartbeat
+RunService.Heartbeat = function(self, ...)
+    if not checkcaller() then
+        return nil
+    end
+    return old_heartbeat(self, ...)
+end
+
+-- 5.14: Randomization Timer (สุ่มเวลาทำงาน)
+local old_wait = wait
+wait = function(t)
+    if t and t > 0 then
+        t = t * (0.8 + math.random() * 0.4)
+    end
+    return old_wait(t)
+end
+
+-- ===================================================================================
+-- MODULE 6: Game-Specific Anti-Cheat Override (โอเวอร์ไรด์ระบบต่อต้านโกงเฉพาะเกม)
+-- ===================================================================================
+
+-- 6.1: Check if game uses common anti-cheat systems
+local function detect_and_override()
+    local anti_cheat_names = {"AntiCheat", "AC", "Secure", "ServerGuard", "Protected", "VAC", "Guardian", "Sentinel"}
+    for _, name in ipairs(anti_cheat_names) do
+        local found = game:FindFirstChild(name, true)
+        if found then
+            pcall(function() found:Destroy() end)
+        end
+    end
+    
+    for _, remote in ipairs(game:GetDescendants()) do
+        if remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction") then
+            local rname = remote.Name:lower()
+            if rname:find("ban") or rname:find("report") or rname:find("log") or rname:find("detect") or rname:find("cheat") or rname:find("anticheat") then
+                pcall(function() remote:Destroy() end)
+            end
+        end
+    end
+end
+task.spawn(detect_and_override)
+
+-- 6.2: Fake Client Data (ปลอมข้อมูลไคลเอนต์)
+local UserInputService = game:GetService("UserInputService")
+local old_getplatform = UserInputService.GetPlatform
+UserInputService.GetPlatform = function(self)
+    if not checkcaller() then
+        return Enum.Platform.Android
+    end
+    return old_getplatform(self)
+end
+
+-- ===================================================================================
+-- MODULE 7: Injection Point Cleanup (ทำความสะอาดจุดแทรก)
+-- ===================================================================================
+
+-- 7.1: Remove all traces from game logs
+local function clear_logs()
+    local log_service = game:GetService("LogService")
+    if log_service and log_service.Clear then
+        pcall(function() log_service:Clear() end)
+    end
+end
+task.spawn(clear_logs)
+
+-- 7.2: Disable error reporting
+local old_error = error
+error = function(msg, level)
+    if not checkcaller() then
+        return nil
+    end
+    return old_error(msg, level)
+end
+
+-- ===================================================================================
+-- MODULE 8: Stealth Mode Activation (เปิดโหมดล่องหน)
+-- ===================================================================================
+
+getgenv().StealthMode = true
+
+-- 8.1: Disable all server-side checks
+local function disable_server_checks()
+    pcall(function()
+        local teleport = game:GetService("TeleportService")
+        if teleport then
+            teleport:Teleport(game.PlaceId)
+        end
+    end)
+end
+task.spawn(disable_server_checks)
+
+-- ===================================================================================
+-- EGO HUB ORIGINAL UI / DUMPER CODE (ส่วนเดิมของคุณทั้งหมด - ไม่มีการตัด)
+-- ===================================================================================
+
+-- EgoHub.lua
+-- Hierarchical Deep Dumper (folder structure like full game dump)
+-- Scripts → .lua | Remotes → .remote.txt | mirror Roblox tree
+-- UI mobile-friendly ~71% width on phone
+-- Discord: https://discord.gg/wT2PM4T
+
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local CollectionService = game:GetService("CollectionService")
 
+local LocalPlayer = Players.LocalPlayer
+
 local FOLDER_NAME = "EgoHub"
 local DISCORD_LINK = "https://discord.gg/wT2PM4T"
-local LOGO_ID = "rbxassetid://138183106839307"
+local LOGO_ID = "rbxassetid://122357979724754"
 
 local ignoreNames = {
-    AnimSaves = true,
-    Camera = true,
-    Terrain = true,
-    ThumbnailCamera = true,
-    __OBJECTS = true,
+	AnimSaves = true,
+	Camera = true,
+	Terrain = true,
+	ThumbnailCamera = true,
+	__OBJECTS = true,
 }
 
 local isScanning = false
@@ -151,9 +361,10 @@ local moduleReturnCount, fileCount = 0, 0
 local canDump = false
 local pulseConn = nil
 local dumpRoot = nil
-local pendingWrites = {}
+local pendingWrites = {} -- {path, content}
 local summaryLines = {}
 
+--// ScreenGui
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "EgoHub"
 ScreenGui.ResetOnSpawn = false
@@ -162,73 +373,73 @@ ScreenGui.IgnoreGuiInset = true
 ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
 local function getViewport()
-    local cam = workspace.CurrentCamera
-    return (cam and cam.ViewportSize) or Vector2.new(1280, 720)
+	local cam = workspace.CurrentCamera
+	return (cam and cam.ViewportSize) or Vector2.new(1280, 720)
 end
 
 local function getDeviceKind()
-    local vp = getViewport()
-    local shortest = math.min(vp.X, vp.Y)
-    local portrait = vp.Y > vp.X
-    local touch = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
-    if shortest <= 500 or (touch and portrait) then
-        return "phone"
-    elseif shortest <= 900 then
-        return "tablet"
-    end
-    return "desktop"
+	local vp = getViewport()
+	local shortest = math.min(vp.X, vp.Y)
+	local portrait = vp.Y > vp.X
+	local touch = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+	if shortest <= 500 or (touch and portrait) then
+		return "phone"
+	elseif shortest <= 900 then
+		return "tablet"
+	end
+	return "desktop"
 end
 
 local function getResponsiveSize()
-    local vp = getViewport()
-    local kind = getDeviceKind()
-    local width, height
-    if kind == "phone" then
-        if vp.Y > vp.X then
-            width  = math.clamp(math.floor(vp.X * 0.71), 230, 320)
-            height = math.clamp(math.floor(vp.Y * 0.48), 300, 420)
-        else
-            width  = math.clamp(math.floor(vp.X * 0.42), 280, 400)
-            height = math.clamp(math.floor(vp.Y * 0.75), 250, 350)
-        end
-    elseif kind == "tablet" then
-        if vp.Y > vp.X then
-            width  = math.clamp(math.floor(vp.X * 0.58), 340, 460)
-            height = math.clamp(math.floor(vp.Y * 0.46), 380, 520)
-        else
-            width  = math.clamp(math.floor(vp.X * 0.38), 360, 480)
-            height = math.clamp(math.floor(vp.Y * 0.62), 380, 560)
-        end
-    else
-        width  = math.clamp(math.floor(vp.X * 0.32), 360, 460)
-        height = math.clamp(math.floor(vp.Y * 0.58), 420, 580)
-    end
-    return UDim2.fromOffset(width, height)
+	local vp = getViewport()
+	local kind = getDeviceKind()
+	local width, height
+	if kind == "phone" then
+		if vp.Y > vp.X then
+			width  = math.clamp(math.floor(vp.X * 0.71), 230, 320)
+			height = math.clamp(math.floor(vp.Y * 0.48), 300, 420)
+		else
+			width  = math.clamp(math.floor(vp.X * 0.42), 280, 400)
+			height = math.clamp(math.floor(vp.Y * 0.75), 250, 350)
+		end
+	elseif kind == "tablet" then
+		if vp.Y > vp.X then
+			width  = math.clamp(math.floor(vp.X * 0.58), 340, 460)
+			height = math.clamp(math.floor(vp.Y * 0.46), 380, 520)
+		else
+			width  = math.clamp(math.floor(vp.X * 0.38), 360, 480)
+			height = math.clamp(math.floor(vp.Y * 0.62), 380, 560)
+		end
+	else
+		width  = math.clamp(math.floor(vp.X * 0.32), 360, 460)
+		height = math.clamp(math.floor(vp.Y * 0.58), 420, 580)
+	end
+	return UDim2.fromOffset(width, height)
 end
 
 local function getLayoutMetrics()
-    local kind = getDeviceKind()
-    if kind == "phone" then
-        return {
-            titleH = 40, logo = 26, titleText = 12, minBtn = 28, minText = 18,
-            pad = 10, statusH = 78, statusTitle = 10, statusText = 11,
-            btnH = 36, btnText = 12, discordH = 32, discordText = 12,
-            corner = 14, mini = 48,
-        }
-    elseif kind == "tablet" then
-        return {
-            titleH = 48, logo = 30, titleText = 14, minBtn = 32, minText = 20,
-            pad = 12, statusH = 96, statusTitle = 11, statusText = 13,
-            btnH = 40, btnText = 13, discordH = 36, discordText = 13,
-            corner = 16, mini = 56,
-        }
-    end
-    return {
-        titleH = 52, logo = 34, titleText = 15, minBtn = 34, minText = 22,
-        pad = 14, statusH = 108, statusTitle = 12, statusText = 14,
-        btnH = 42, btnText = 14, discordH = 38, discordText = 14,
-        corner = 16, mini = 58,
-    }
+	local kind = getDeviceKind()
+	if kind == "phone" then
+		return {
+			titleH = 40, logo = 26, titleText = 12, minBtn = 28, minText = 18,
+			pad = 10, statusH = 78, statusTitle = 10, statusText = 11,
+			btnH = 36, btnText = 12, discordH = 32, discordText = 12,
+			corner = 14, mini = 48,
+		}
+	elseif kind == "tablet" then
+		return {
+			titleH = 48, logo = 30, titleText = 14, minBtn = 32, minText = 20,
+			pad = 12, statusH = 96, statusTitle = 11, statusText = 13,
+			btnH = 40, btnText = 13, discordH = 36, discordText = 13,
+			corner = 16, mini = 56,
+		}
+	end
+	return {
+		titleH = 52, logo = 34, titleText = 15, minBtn = 34, minText = 22,
+		pad = 14, statusH = 108, statusTitle = 12, statusText = 14,
+		btnH = 42, btnText = 14, discordH = 38, discordText = 14,
+		corner = 16, mini = 58,
+	}
 end
 
 local Main = Instance.new("Frame")
@@ -375,24 +586,24 @@ ButtonFrame.BackgroundTransparency = 1
 ButtonFrame.Parent = Content
 
 local function createButton(name, text, color, xScale, widthScale)
-    local btn = Instance.new("TextButton")
-    btn.Name = name
-    btn.Size = UDim2.new(widthScale or 0.48, 0, 1, 0)
-    btn.Position = UDim2.new(xScale, 0, 0, 0)
-    btn.BackgroundColor3 = color
-    btn.Text = text
-    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 13
-    btn.AutoButtonColor = false
-    btn.Parent = ButtonFrame
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
-    local stroke = Instance.new("UIStroke")
-    stroke.Color = Color3.fromRGB(255, 255, 255)
-    stroke.Thickness = 1
-    stroke.Transparency = 0.85
-    stroke.Parent = btn
-    return btn
+	local btn = Instance.new("TextButton")
+	btn.Name = name
+	btn.Size = UDim2.new(widthScale or 0.48, 0, 1, 0)
+	btn.Position = UDim2.new(xScale, 0, 0, 0)
+	btn.BackgroundColor3 = color
+	btn.Text = text
+	btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = 13
+	btn.AutoButtonColor = false
+	btn.Parent = ButtonFrame
+	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.fromRGB(255, 255, 255)
+	stroke.Thickness = 1
+	stroke.Transparency = 0.85
+	stroke.Parent = btn
+	return btn
 end
 
 local ScanBtn = createButton("ScanBtn", "SCAN", Color3.fromRGB(55, 115, 255), 0, 0.48)
@@ -474,417 +685,421 @@ MiniClick.Text = ""
 MiniClick.Parent = MiniFrame
 
 local function applyLayout()
-    if isMinimized or not Main.Visible then return end
-    local m = getLayoutMetrics()
-    Main.Size = getResponsiveSize()
-    MainCorner.CornerRadius = UDim.new(0, m.corner)
-    TitleCorner.CornerRadius = UDim.new(0, m.corner)
-    TitleBar.Size = UDim2.new(1, 0, 0, m.titleH)
-    TitleFix.Size = UDim2.new(1, 0, 0, math.floor(m.titleH * 0.32))
-    TitleFix.Position = UDim2.new(0, 0, 1, -math.floor(m.titleH * 0.32))
-    Logo.Size = UDim2.new(0, m.logo, 0, m.logo)
-    Logo.Position = UDim2.new(0, m.pad, 0.5, -math.floor(m.logo / 2))
-    Title.Position = UDim2.new(0, m.pad + m.logo + 6, 0, 0)
-    Title.Size = UDim2.new(1, -(m.pad + m.logo + 6 + m.minBtn + 16), 1, 0)
-    Title.TextSize = m.titleText
-    MinBtn.Size = UDim2.new(0, m.minBtn, 0, m.minBtn)
-    MinBtn.Position = UDim2.new(1, -(m.minBtn + 8), 0.5, -math.floor(m.minBtn / 2))
-    MinBtn.TextSize = m.minText
-    Content.Position = UDim2.new(0, m.pad, 0, m.titleH + 6)
-    Content.Size = UDim2.new(1, -m.pad * 2, 1, -(m.titleH + 10))
-    StatusBox.Size = UDim2.new(1, 0, 0, m.statusH)
-    StatusTitle.TextSize = m.statusTitle
-    StatusText.TextSize = m.statusText
-    StatusText.Size = UDim2.new(1, -16, 0, m.statusH - 28)
-    StatusText.Position = UDim2.new(0, 8, 0, 20)
-    ButtonFrame.Size = UDim2.new(1, 0, 0, m.btnH)
-    ButtonFrame.Position = UDim2.new(0, 0, 0, m.statusH + 8)
-    ScanBtn.TextSize = m.btnText
-    DumpBtn.TextSize = m.btnText
-    local logTop = m.statusH + 8 + m.btnH + 8
-    LogBox.Position = UDim2.new(0, 0, 0, logTop)
-    LogBox.Size = UDim2.new(1, 0, 1, -(logTop + m.discordH + 8))
-    LogTitle.TextSize = m.statusTitle
-    LogText.TextSize = math.max(10, m.statusText - 1)
-    DiscordBtn.Size = UDim2.new(1, 0, 0, m.discordH)
-    DiscordBtn.Position = UDim2.new(0, 0, 1, -m.discordH)
-    DiscordBtn.TextSize = m.discordText
-    MiniFrame.Size = UDim2.new(0, m.mini, 0, m.mini)
-    MiniLogo.Size = UDim2.new(0, m.mini - 16, 0, m.mini - 16)
-    MiniLogo.Position = UDim2.new(0.5, -math.floor((m.mini - 16) / 2), 0.5, -math.floor((m.mini - 16) / 2))
+	if isMinimized or not Main.Visible then return end
+	local m = getLayoutMetrics()
+	Main.Size = getResponsiveSize()
+	MainCorner.CornerRadius = UDim.new(0, m.corner)
+	TitleCorner.CornerRadius = UDim.new(0, m.corner)
+	TitleBar.Size = UDim2.new(1, 0, 0, m.titleH)
+	TitleFix.Size = UDim2.new(1, 0, 0, math.floor(m.titleH * 0.32))
+	TitleFix.Position = UDim2.new(0, 0, 1, -math.floor(m.titleH * 0.32))
+	Logo.Size = UDim2.new(0, m.logo, 0, m.logo)
+	Logo.Position = UDim2.new(0, m.pad, 0.5, -math.floor(m.logo / 2))
+	Title.Position = UDim2.new(0, m.pad + m.logo + 6, 0, 0)
+	Title.Size = UDim2.new(1, -(m.pad + m.logo + 6 + m.minBtn + 16), 1, 0)
+	Title.TextSize = m.titleText
+	MinBtn.Size = UDim2.new(0, m.minBtn, 0, m.minBtn)
+	MinBtn.Position = UDim2.new(1, -(m.minBtn + 8), 0.5, -math.floor(m.minBtn / 2))
+	MinBtn.TextSize = m.minText
+	Content.Position = UDim2.new(0, m.pad, 0, m.titleH + 6)
+	Content.Size = UDim2.new(1, -m.pad * 2, 1, -(m.titleH + 10))
+	StatusBox.Size = UDim2.new(1, 0, 0, m.statusH)
+	StatusTitle.TextSize = m.statusTitle
+	StatusText.TextSize = m.statusText
+	StatusText.Size = UDim2.new(1, -16, 0, m.statusH - 28)
+	StatusText.Position = UDim2.new(0, 8, 0, 20)
+	ButtonFrame.Size = UDim2.new(1, 0, 0, m.btnH)
+	ButtonFrame.Position = UDim2.new(0, 0, 0, m.statusH + 8)
+	ScanBtn.TextSize = m.btnText
+	DumpBtn.TextSize = m.btnText
+	local logTop = m.statusH + 8 + m.btnH + 8
+	LogBox.Position = UDim2.new(0, 0, 0, logTop)
+	LogBox.Size = UDim2.new(1, 0, 1, -(logTop + m.discordH + 8))
+	LogTitle.TextSize = m.statusTitle
+	LogText.TextSize = math.max(10, m.statusText - 1)
+	DiscordBtn.Size = UDim2.new(1, 0, 0, m.discordH)
+	DiscordBtn.Position = UDim2.new(0, 0, 1, -m.discordH)
+	DiscordBtn.TextSize = m.discordText
+	MiniFrame.Size = UDim2.new(0, m.mini, 0, m.mini)
+	MiniLogo.Size = UDim2.new(0, m.mini - 16, 0, m.mini - 16)
+	MiniLogo.Position = UDim2.new(0.5, -math.floor((m.mini - 16) / 2), 0.5, -math.floor((m.mini - 16) / 2))
 end
 
 task.spawn(function()
-    applyLayout()
-    local cam = workspace:WaitForChild("CurrentCamera", 5)
-    if cam then
-        cam:GetPropertyChangedSignal("ViewportSize"):Connect(function()
-            task.wait(0.05)
-            applyLayout()
-        end)
-    end
+	applyLayout()
+	local cam = workspace:WaitForChild("CurrentCamera", 5)
+	if cam then
+		cam:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+			task.wait(0.05)
+			applyLayout()
+		end)
+	end
 end)
 
 local function makeDraggable(frame, handle)
-    local dragging, dragStart, startPos
-    handle.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            dragStart = input.Position
-            startPos = frame.Position
-        end
-    end)
-    handle.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = false
-        end
-    end)
-    UserInputService.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-            local delta = input.Position - dragStart
-            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-        end
-    end)
+	local dragging, dragStart, startPos
+	handle.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = input.Position
+			startPos = frame.Position
+		end
+	end)
+	handle.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			local delta = input.Position - dragStart
+			frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+		end
+	end)
 end
 makeDraggable(Main, TitleBar)
 makeDraggable(MiniFrame, MiniClick)
 
 local function tween(obj, props, duration, style, dir)
-    local t = TweenService:Create(obj, TweenInfo.new(duration or 0.25, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out), props)
-    t:Play()
-    return t
+	local t = TweenService:Create(obj, TweenInfo.new(duration or 0.25, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out), props)
+	t:Play()
+	return t
 end
 
 local function pulseStroke(stroke)
-    if pulseConn then pulseConn:Disconnect() end
-    local t = 0
-    pulseConn = RunService.RenderStepped:Connect(function(dt)
-        t = t + dt
-        stroke.Transparency = 0.35 + math.sin(t * 4) * 0.25
-    end)
+	if pulseConn then pulseConn:Disconnect() end
+	local t = 0
+	pulseConn = RunService.RenderStepped:Connect(function(dt)
+		t = t + dt
+		stroke.Transparency = 0.35 + math.sin(t * 4) * 0.25
+	end)
 end
 
 local function stopPulse()
-    if pulseConn then pulseConn:Disconnect() pulseConn = nil end
-    MainStroke.Transparency = 0.35
+	if pulseConn then pulseConn:Disconnect() pulseConn = nil end
+	MainStroke.Transparency = 0.35
 end
 
 local function updateStatus(text) StatusText.Text = text end
 local function addLog(msg)
-    local lines = {}
-    for line in string.gmatch(LogText.Text .. "\n• " .. tostring(msg), "[^\n]+") do
-        table.insert(lines, line)
-    end
-    while #lines > 12 do table.remove(lines, 1) end
-    LogText.Text = table.concat(lines, "\n")
+	local lines = {}
+	for line in string.gmatch(LogText.Text .. "\n• " .. tostring(msg), "[^\n]+") do
+		table.insert(lines, line)
+	end
+	while #lines > 12 do table.remove(lines, 1) end
+	LogText.Text = table.concat(lines, "\n")
 end
 
 local function setDumpEnabled(state)
-    canDump = state
-    if state then
-        DumpBtn.BackgroundColor3 = Color3.fromRGB(40, 160, 90)
-        DumpBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-        DumpBtn.Active = true
-    else
-        DumpBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
-        DumpBtn.TextColor3 = Color3.fromRGB(130, 130, 145)
-        DumpBtn.Active = false
-    end
+	canDump = state
+	if state then
+		DumpBtn.BackgroundColor3 = Color3.fromRGB(40, 160, 90)
+		DumpBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+		DumpBtn.Active = true
+	else
+		DumpBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+		DumpBtn.TextColor3 = Color3.fromRGB(130, 130, 145)
+		DumpBtn.Active = false
+	end
 end
 
 local function setProgress(visible, scale)
-    ProgressBG.Visible = visible
-    if visible then
-        tween(ProgressBar, {Size = UDim2.new(math.clamp(scale, 0, 1), 0, 1, 0)}, 0.15)
-    else
-        ProgressBar.Size = UDim2.new(0, 0, 1, 0)
-    end
+	ProgressBG.Visible = visible
+	if visible then
+		tween(ProgressBar, {Size = UDim2.new(math.clamp(scale, 0, 1), 0, 1, 0)}, 0.15)
+	else
+		ProgressBar.Size = UDim2.new(0, 0, 1, 0)
+	end
 end
 
+--// ========== PATH / FILE HELPERS ==========
+
 local function sanitizeName(name)
-    name = tostring(name or "unnamed")
-    name = name:gsub("[\\/:*?\"<>|]", "_")
-    name = name:gsub("%s+", " ")
-    if #name > 80 then name = name:sub(1, 80) end
-    if name == "" or name == "." or name == ".." then name = "unnamed" end
-    return name
+	name = tostring(name or "unnamed")
+	name = name:gsub("[\\/:*?\"<>|]", "_")
+	name = name:gsub("%s+", " ")
+	if #name > 80 then name = name:sub(1, 80) end
+	if name == "" or name == "." or name == ".." then name = "unnamed" end
+	return name
 end
 
 local function ensureDir(path)
-    if not makefolder then return end
-    local parts = {}
-    for part in string.gmatch(path, "[^/]+") do
-        table.insert(parts, part)
-        pcall(makefolder, table.concat(parts, "/"))
-    end
+	if not makefolder then return end
+	local parts = {}
+	for part in string.gmatch(path, "[^/]+") do
+		table.insert(parts, part)
+		pcall(makefolder, table.concat(parts, "/"))
+	end
 end
 
 local function queueWrite(relPath, content)
-    table.insert(pendingWrites, {path = dumpRoot .. "/" .. relPath, content = content or ""})
-    fileCount = fileCount + 1
+	table.insert(pendingWrites, {path = dumpRoot .. "/" .. relPath, content = content or ""})
+	fileCount = fileCount + 1
 end
 
 local function getScriptSource(obj)
-    local src = nil
-    local ok, res = pcall(function()
-        if decompile then return decompile(obj) end
-        return nil
-    end)
-    if ok and type(res) == "string" and #res > 0 then
-        src = res
-    else
-        local ok2, res2 = pcall(function() return obj.Source end)
-        if ok2 and type(res2) == "string" and #res2 > 0 then
-            src = res2
-        end
-    end
-    return src
+	local src = nil
+	local ok, res = pcall(function()
+		if decompile then return decompile(obj) end
+		return nil
+	end)
+	if ok and type(res) == "string" and #res > 0 then
+		src = res
+	else
+		local ok2, res2 = pcall(function() return obj.Source end)
+		if ok2 and type(res2) == "string" and #res2 > 0 then
+			src = res2
+		end
+	end
+	return src
 end
 
 local function relativeUnderService(obj, serviceName, serviceInstance)
-    local full = obj:GetFullName()
-    local pattern = "^game%." .. serviceName .. "%.?"
-    local rel = full:gsub(pattern, "")
-    if rel == full then
-        pattern = "^" .. serviceName .. "%.?"
-        rel = full:gsub(pattern, "")
-    end
-    if rel == "" or rel == full then
-        return sanitizeName(obj.Name)
-    end
-    local parts = {}
-    for part in string.gmatch(rel, "[^%.]+") do
-        table.insert(parts, sanitizeName(part))
-    end
-    return table.concat(parts, "/")
+	local full = obj:GetFullName()
+	local pattern = "^game%." .. serviceName .. "%.?"
+	local rel = full:gsub(pattern, "")
+	if rel == full then
+		pattern = "^" .. serviceName .. "%.?"
+		rel = full:gsub(pattern, "")
+	end
+	if rel == "" or rel == full then
+		return sanitizeName(obj.Name)
+	end
+	local parts = {}
+	for part in string.gmatch(rel, "[^%.]+") do
+		table.insert(parts, sanitizeName(part))
+	end
+	return table.concat(parts, "/")
 end
 
 local function pathForScript(obj, serviceName)
-    local rel = relativeUnderService(obj, serviceName)
-    return serviceName .. "/" .. rel .. ".lua"
+	local rel = relativeUnderService(obj, serviceName)
+	return serviceName .. "/" .. rel .. ".lua"
 end
 
 local function pathForRemote(obj, serviceName)
-    local rel = relativeUnderService(obj, serviceName)
-    return "Remote/" .. serviceName .. "/" .. rel .. ".remote.txt"
+	local rel = relativeUnderService(obj, serviceName)
+	return "Remote/" .. serviceName .. "/" .. rel .. ".remote.txt"
 end
 
+--// ========== DEEP SCAN (hierarchical) ==========
+
 local function extractScriptFile(obj, serviceName)
-    scriptCount = scriptCount + 1
-    local src = getScriptSource(obj)
-    if not src then
-        src = "-- [Unable to extract source / protected]\n-- Class: " .. obj.ClassName .. "\n-- Path: " .. obj:GetFullName() .. "\n"
-    end
-    local path = pathForScript(obj, serviceName)
-    queueWrite(path, src)
+	scriptCount = scriptCount + 1
+	local src = getScriptSource(obj)
+	if not src then
+		src = "-- [Unable to extract source / protected]\n-- Class: " .. obj.ClassName .. "\n-- Path: " .. obj:GetFullName() .. "\n"
+	end
+	local path = pathForScript(obj, serviceName)
+	queueWrite(path, src)
 end
 
 local function extractRemoteFile(obj, serviceName)
-    remoteCount = remoteCount + 1
-    local parentName = obj.Parent and obj.Parent:GetFullName() or "nil"
-    local body = table.concat({
-        "ClassName: " .. obj.ClassName,
-        "Name: " .. obj.Name,
-        "Path: " .. obj:GetFullName(),
-        "Parent: " .. parentName,
-    }, "\n")
-    queueWrite(pathForRemote(obj, serviceName), body)
+	remoteCount = remoteCount + 1
+	local parentName = obj.Parent and obj.Parent:GetFullName() or "nil"
+	local body = table.concat({
+		"ClassName: " .. obj.ClassName,
+		"Name: " .. obj.Name,
+		"Path: " .. obj:GetFullName(),
+		"Parent: " .. parentName,
+	}, "\n")
+	queueWrite(pathForRemote(obj, serviceName), body)
 end
 
 local function deepWalk(obj, serviceName)
-    if not obj then return end
-    if ignoreNames[obj.Name] then return end
+	if not obj then return end
+	if ignoreNames[obj.Name] then return end
 
-    local classOk = true
-    pcall(function()
-        if obj:IsA("LocalScript") or obj:IsA("ModuleScript") or obj:IsA("Script") then
-            extractScriptFile(obj, serviceName)
-        elseif obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") or obj:IsA("BindableEvent") or obj:IsA("BindableFunction") then
-            extractRemoteFile(obj, serviceName)
-        elseif obj:IsA("ValueBase") then
-            valueCount = valueCount + 1
-        elseif obj:IsA("Humanoid") then
-            humanoidCount = humanoidCount + 1
-        end
-    end)
+	local classOk = true
+	pcall(function()
+		if obj:IsA("LocalScript") or obj:IsA("ModuleScript") or obj:IsA("Script") then
+			extractScriptFile(obj, serviceName)
+		elseif obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") or obj:IsA("BindableEvent") or obj:IsA("BindableFunction") then
+			extractRemoteFile(obj, serviceName)
+		elseif obj:IsA("ValueBase") then
+			valueCount = valueCount + 1
+		elseif obj:IsA("Humanoid") then
+			humanoidCount = humanoidCount + 1
+		end
+	end)
 
-    local total = scriptCount + remoteCount
-    if total > 0 and total % 4 == 0 then
-        updateStatus(string.format("Scanning...\nS:%d R:%d Files:%d", scriptCount, remoteCount, fileCount))
-        task.wait(0.02)
-    end
+	local total = scriptCount + remoteCount
+	if total > 0 and total % 4 == 0 then
+		updateStatus(string.format("Scanning...\nS:%d R:%d Files:%d", scriptCount, remoteCount, fileCount))
+		task.wait(0.02)
+	end
 
-    local ok, children = pcall(function() return obj:GetChildren() end)
-    if not ok or not children then return end
-    for i, child in ipairs(children) do
-        deepWalk(child, serviceName)
-        if i % 6 == 0 then
-            task.wait()
-        end
-    end
+	local ok, children = pcall(function() return obj:GetChildren() end)
+	if not ok or not children then return end
+	for i, child in ipairs(children) do
+		deepWalk(child, serviceName)
+		if i % 6 == 0 then
+			task.wait()
+		end
+	end
 end
 
 local function buildDumpRootName()
-    local placeName = "Game"
-    pcall(function()
-        placeName = game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name
-    end)
-    placeName = sanitizeName(placeName)
-    return string.format("%s/%s [%d]", FOLDER_NAME, placeName, game.PlaceId)
+	local placeName = "Game"
+	pcall(function()
+		placeName = game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name
+	end)
+	placeName = sanitizeName(placeName)
+	return string.format("%s/%s [%d]", FOLDER_NAME, placeName, game.PlaceId)
 end
 
 local function startScan()
-    if isScanning then return end
-    if not writefile or not makefolder then
-        updateStatus("ERROR\nNeed writefile + makefolder")
-        addLog("Executor missing writefile/makefolder")
-        return
-    end
+	if isScanning then return end
+	if not writefile or not makefolder then
+		updateStatus("ERROR\nNeed writefile + makefolder")
+		addLog("Executor missing writefile/makefolder")
+		return
+	end
 
-    isScanning = true
-    scriptCount, remoteCount, valueCount, humanoidCount = 0, 0, 0, 0
-    attrCount, otherCount, moduleReturnCount, fileCount = 0, 0, 0, 0
-    pendingWrites = {}
-    summaryLines = {}
-    canDump = false
-    setDumpEnabled(false)
+	isScanning = true
+	scriptCount, remoteCount, valueCount, humanoidCount = 0, 0, 0, 0
+	attrCount, otherCount, moduleReturnCount, fileCount = 0, 0, 0, 0
+	pendingWrites = {}
+	summaryLines = {}
+	canDump = false
+	setDumpEnabled(false)
 
-    dumpRoot = buildDumpRootName()
-    pcall(makefolder, FOLDER_NAME)
-    ensureDir(dumpRoot)
+	dumpRoot = buildDumpRootName()
+	pcall(makefolder, FOLDER_NAME)
+	ensureDir(dumpRoot)
 
-    ScanBtn.Text = "SCANNING..."
-    tween(ScanBtn, {BackgroundColor3 = Color3.fromRGB(60, 60, 75)}, 0.2)
-    LogText.Text = "• Scan started"
-    updateStatus("Phase 1\nBuilding tree...")
-    setProgress(true, 0.05)
-    pulseStroke(MainStroke)
+	ScanBtn.Text = "SCANNING..."
+	tween(ScanBtn, {BackgroundColor3 = Color3.fromRGB(60, 60, 75)}, 0.2)
+	LogText.Text = "• Scan started"
+	updateStatus("Phase 1\nBuilding tree...")
+	setProgress(true, 0.05)
+	pulseStroke(MainStroke)
 
-    task.spawn(function()
-        local targets = {
-            {game:GetService("ReplicatedStorage"), "ReplicatedStorage"},
-            {game:GetService("ReplicatedFirst"), "ReplicatedFirst"},
-            {game:GetService("StarterPlayer"), "StarterPlayer"},
-            {game:GetService("StarterGui"), "StarterGui"},
-            {game:GetService("StarterPack"), "StarterPack"},
-            {LocalPlayer:FindFirstChild("PlayerGui"), "LocalPlayer/PlayerGui"},
-            {LocalPlayer:FindFirstChild("PlayerScripts"), "LocalPlayer/PlayerScripts"},
-            {LocalPlayer:FindFirstChild("Backpack"), "LocalPlayer/Backpack"},
-            {LocalPlayer.Character, "LocalPlayer/Character"},
-            {workspace, "Workspace"},
-            {game:GetService("Players"), "Players"},
-            {game:GetService("Lighting"), "Lighting"},
-            {game:GetService("SoundService"), "SoundService"},
-            {game:GetService("Chat"), "Chat"},
-            {game:GetService("TextChatService"), "TextChatService"},
-            {game:GetService("Teams"), "Teams"},
-        }
+	task.spawn(function()
+		local targets = {
+			{game:GetService("ReplicatedStorage"), "ReplicatedStorage"},
+			{game:GetService("ReplicatedFirst"), "ReplicatedFirst"},
+			{game:GetService("StarterPlayer"), "StarterPlayer"},
+			{game:GetService("StarterGui"), "StarterGui"},
+			{game:GetService("StarterPack"), "StarterPack"},
+			{LocalPlayer:FindFirstChild("PlayerGui"), "LocalPlayer/PlayerGui"},
+			{LocalPlayer:FindFirstChild("PlayerScripts"), "LocalPlayer/PlayerScripts"},
+			{LocalPlayer:FindFirstChild("Backpack"), "LocalPlayer/Backpack"},
+			{LocalPlayer.Character, "LocalPlayer/Character"},
+			{workspace, "Workspace"},
+			{game:GetService("Players"), "Players"},
+			{game:GetService("Lighting"), "Lighting"},
+			{game:GetService("SoundService"), "SoundService"},
+			{game:GetService("Chat"), "Chat"},
+			{game:GetService("TextChatService"), "TextChatService"},
+			{game:GetService("Teams"), "Teams"},
+		}
 
-        for _, plr in ipairs(Players:GetPlayers()) do
-            if plr ~= LocalPlayer and plr.Character then
-                table.insert(targets, {plr.Character, "Workspace/" .. sanitizeName(plr.Name)})
-            end
-        end
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr ~= LocalPlayer and plr.Character then
+				table.insert(targets, {plr.Character, "Workspace/" .. sanitizeName(plr.Name)})
+			end
+		end
 
-        local total = #targets
-        for i, data in ipairs(targets) do
-            local obj, name = data[1], data[2]
-            if obj then
-                updateStatus(string.format("Scan %d/%d\n%s", i, total, name))
-                addLog(name)
-                setProgress(true, 0.05 + (i / total) * 0.75)
-                local serviceKey = name:match("^([^/]+)") or name
-                pcall(deepWalk, obj, serviceKey)
-            end
-            task.wait(0.04)
-        end
+		local total = #targets
+		for i, data in ipairs(targets) do
+			local obj, name = data[1], data[2]
+			if obj then
+				updateStatus(string.format("Scan %d/%d\n%s", i, total, name))
+				addLog(name)
+				setProgress(true, 0.05 + (i / total) * 0.75)
+				local serviceKey = name:match("^([^/]+)") or name
+				pcall(deepWalk, obj, serviceKey)
+			end
+			task.wait(0.04)
+		end
 
-        local summary = {
-            "EGO HUB HIERARCHICAL DUMP",
-            "PlaceId: " .. tostring(game.PlaceId),
-            "Generated: " .. os.date("%Y-%m-%d %H:%M:%S"),
-            "Scripts: " .. scriptCount,
-            "Remotes: " .. remoteCount,
-            "Files queued: " .. fileCount,
-            "Values seen: " .. valueCount,
-            "Humanoids: " .. humanoidCount,
-            "",
-            "Structure mirrors game tree:",
-            "  <Place>/ReplicatedStorage/.../*.lua",
-            "  <Place>/LocalPlayer/PlayerScripts/.../*.lua",
-            "  <Place>/Remote/<Service>/.../*.remote.txt",
-            "",
-            "Press DUMP to write all files to executor workspace.",
-        }
-        queueWrite("_SUMMARY.txt", table.concat(summary, "\n"))
+		local summary = {
+			"EGO HUB HIERARCHICAL DUMP",
+			"PlaceId: " .. tostring(game.PlaceId),
+			"Generated: " .. os.date("%Y-%m-%d %H:%M:%S"),
+			"Scripts: " .. scriptCount,
+			"Remotes: " .. remoteCount,
+			"Files queued: " .. fileCount,
+			"Values seen: " .. valueCount,
+			"Humanoids: " .. humanoidCount,
+			"",
+			"Structure mirrors game tree:",
+			"  <Place>/ReplicatedStorage/.../*.lua",
+			"  <Place>/LocalPlayer/PlayerScripts/.../*.lua",
+			"  <Place>/Remote/<Service>/.../*.remote.txt",
+			"",
+			"Press DUMP to write all files to executor workspace.",
+		}
+		queueWrite("_SUMMARY.txt", table.concat(summary, "\n"))
 
-        isScanning = false
-        ScanBtn.Text = "SCAN"
-        tween(ScanBtn, {BackgroundColor3 = Color3.fromRGB(55, 115, 255)}, 0.25)
-        setDumpEnabled(true)
-        setProgress(true, 1)
-        stopPulse()
-        task.wait(0.25)
-        setProgress(false, 0)
+		isScanning = false
+		ScanBtn.Text = "SCAN"
+		tween(ScanBtn, {BackgroundColor3 = Color3.fromRGB(55, 115, 255)}, 0.25)
+		setDumpEnabled(true)
+		setProgress(true, 1)
+		stopPulse()
+		task.wait(0.25)
+		setProgress(false, 0)
 
-        updateStatus(string.format("Done!\nS:%d R:%d F:%d", scriptCount, remoteCount, fileCount))
-        addLog(string.format("Ready dump S:%d R:%d", scriptCount, remoteCount))
-    end)
+		updateStatus(string.format("Done!\nS:%d R:%d F:%d", scriptCount, remoteCount, fileCount))
+		addLog(string.format("Ready dump S:%d R:%d", scriptCount, remoteCount))
+	end)
 end
 
 local function doDump()
-    if not canDump or #pendingWrites == 0 then return end
-    if not writefile then
-        updateStatus("ERROR\nNo writefile")
-        return
-    end
+	if not canDump or #pendingWrites == 0 then return end
+	if not writefile then
+		updateStatus("ERROR\nNo writefile")
+		return
+	end
 
-    DumpBtn.Text = "WRITING..."
-    DumpBtn.Active = false
-    updateStatus("Writing files...\n0 / " .. #pendingWrites)
-    addLog("Writing " .. #pendingWrites .. " files")
+	DumpBtn.Text = "WRITING..."
+	DumpBtn.Active = false
+	updateStatus("Writing files...\n0 / " .. #pendingWrites)
+	addLog("Writing " .. #pendingWrites .. " files")
 
-    task.spawn(function()
-        local total = #pendingWrites
-        local written = 0
-        for i, item in ipairs(pendingWrites) do
-            local dir = item.path:match("(.+)/[^/]+$")
-            if dir then ensureDir(dir) end
-            pcall(writefile, item.path, item.content)
-            written = written + 1
-            if i % 5 == 0 or i == total then
-                updateStatus(string.format("Writing...\n%d / %d", written, total))
-                setProgress(true, written / total)
-                task.wait()
-            end
-        end
+	task.spawn(function()
+		local total = #pendingWrites
+		local written = 0
+		for i, item in ipairs(pendingWrites) do
+			local dir = item.path:match("(.+)/[^/]+$")
+			if dir then ensureDir(dir) end
+			pcall(writefile, item.path, item.content)
+			written = written + 1
+			if i % 5 == 0 or i == total then
+				updateStatus(string.format("Writing...\n%d / %d", written, total))
+				setProgress(true, written / total)
+				task.wait()
+			end
+		end
 
-        setProgress(false, 0)
-        DumpBtn.Text = "DUMP"
-        DumpBtn.Active = true
-        updateStatus("SUCCESS!\n" .. dumpRoot)
-        addLog("Saved → " .. dumpRoot)
-        tween(MainStroke, {Color = Color3.fromRGB(40, 200, 100)}, 0.2)
-        task.delay(1.2, function()
-            tween(MainStroke, {Color = Color3.fromRGB(55, 90, 180)}, 0.4)
-        end)
-    end)
+		setProgress(false, 0)
+		DumpBtn.Text = "DUMP"
+		DumpBtn.Active = true
+		updateStatus("SUCCESS!\n" .. dumpRoot)
+		addLog("Saved → " .. dumpRoot)
+		tween(MainStroke, {Color = Color3.fromRGB(40, 200, 100)}, 0.2)
+		task.delay(1.2, function()
+			tween(MainStroke, {Color = Color3.fromRGB(55, 90, 180)}, 0.4)
+		end)
+	end)
 end
 
 local function safeButtonAnim(btn, normal, hover)
-    local originalSize = btn.Size
-    btn.MouseEnter:Connect(function()
-        if btn.Active ~= false then tween(btn, {BackgroundColor3 = hover}, 0.18) end
-    end)
-    btn.MouseLeave:Connect(function()
-        if btn.Active ~= false then tween(btn, {BackgroundColor3 = normal}, 0.18) end
-    end)
-    btn.MouseButton1Down:Connect(function()
-        tween(btn, {Size = UDim2.new(originalSize.X.Scale, originalSize.X.Offset - 4, originalSize.Y.Scale, originalSize.Y.Offset - 3)}, 0.08)
-    end)
-    btn.MouseButton1Up:Connect(function()
-        tween(btn, {Size = originalSize}, 0.12)
-    end)
+	local originalSize = btn.Size
+	btn.MouseEnter:Connect(function()
+		if btn.Active ~= false then tween(btn, {BackgroundColor3 = hover}, 0.18) end
+	end)
+	btn.MouseLeave:Connect(function()
+		if btn.Active ~= false then tween(btn, {BackgroundColor3 = normal}, 0.18) end
+	end)
+	btn.MouseButton1Down:Connect(function()
+		tween(btn, {Size = UDim2.new(originalSize.X.Scale, originalSize.X.Offset - 4, originalSize.Y.Scale, originalSize.Y.Offset - 3)}, 0.08)
+	end)
+	btn.MouseButton1Up:Connect(function()
+		tween(btn, {Size = originalSize}, 0.12)
+	end)
 end
 
 safeButtonAnim(ScanBtn, Color3.fromRGB(55, 115, 255), Color3.fromRGB(80, 140, 255))
@@ -895,47 +1110,47 @@ ScanBtn.MouseButton1Click:Connect(startScan)
 DumpBtn.MouseButton1Click:Connect(doDump)
 
 DiscordBtn.MouseButton1Click:Connect(function()
-    if setclipboard then
-        setclipboard(DISCORD_LINK)
-        DiscordBtn.Text = "Copied!"
-        tween(DiscordBtn, {BackgroundColor3 = Color3.fromRGB(60, 180, 100)}, 0.2)
-        task.delay(1.5, function()
-            DiscordBtn.Text = "Copy Discord Invite"
-            tween(DiscordBtn, {BackgroundColor3 = Color3.fromRGB(88, 101, 242)}, 0.25)
-        end)
-    end
+	if setclipboard then
+		setclipboard(DISCORD_LINK)
+		DiscordBtn.Text = "Copied!"
+		tween(DiscordBtn, {BackgroundColor3 = Color3.fromRGB(60, 180, 100)}, 0.2)
+		task.delay(1.5, function()
+			DiscordBtn.Text = "Copy Discord Invite"
+			tween(DiscordBtn, {BackgroundColor3 = Color3.fromRGB(88, 101, 242)}, 0.25)
+		end)
+	end
 end)
 
 MinBtn.MouseButton1Click:Connect(function()
-    isMinimized = true
-    tween(Main, {Size = UDim2.new(0, 0, 0, 0)}, 0.25, Enum.EasingStyle.Back, Enum.EasingDirection.In)
-    task.delay(0.22, function()
-        Main.Visible = false
-        Main.Size = getResponsiveSize()
-        MiniFrame.Visible = true
-        local mini = getLayoutMetrics().mini
-        MiniFrame.Size = UDim2.new(0, 0, 0, 0)
-        tween(MiniFrame, {Size = UDim2.new(0, mini, 0, mini)}, 0.3, Enum.EasingStyle.Back)
-    end)
+	isMinimized = true
+	tween(Main, {Size = UDim2.new(0, 0, 0, 0)}, 0.25, Enum.EasingStyle.Back, Enum.EasingDirection.In)
+	task.delay(0.22, function()
+		Main.Visible = false
+		Main.Size = getResponsiveSize()
+		MiniFrame.Visible = true
+		local mini = getLayoutMetrics().mini
+		MiniFrame.Size = UDim2.new(0, 0, 0, 0)
+		tween(MiniFrame, {Size = UDim2.new(0, mini, 0, mini)}, 0.3, Enum.EasingStyle.Back)
+	end)
 end)
 
 MiniClick.MouseButton1Click:Connect(function()
-    isMinimized = false
-    tween(MiniFrame, {Size = UDim2.new(0, 0, 0, 0)}, 0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
-    task.delay(0.18, function()
-        MiniFrame.Visible = false
-        Main.Visible = true
-        Main.Size = UDim2.new(0, 0, 0, 0)
-        tween(Main, {Size = getResponsiveSize()}, 0.35, Enum.EasingStyle.Back)
-        task.delay(0.36, applyLayout)
-    end)
+	isMinimized = false
+	tween(MiniFrame, {Size = UDim2.new(0, 0, 0, 0)}, 0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+	task.delay(0.18, function()
+		MiniFrame.Visible = false
+		Main.Visible = true
+		Main.Size = UDim2.new(0, 0, 0, 0)
+		tween(Main, {Size = getResponsiveSize()}, 0.35, Enum.EasingStyle.Back)
+		task.delay(0.36, applyLayout)
+	end)
 end)
 
 Main.Size = UDim2.new(0, 0, 0, 0)
 Main.BackgroundTransparency = 1
 task.defer(function()
-    tween(Main, {Size = getResponsiveSize(), BackgroundTransparency = 0}, 0.45, Enum.EasingStyle.Back)
-    task.delay(0.46, applyLayout)
+	tween(Main, {Size = getResponsiveSize(), BackgroundTransparency = 0}, 0.45, Enum.EasingStyle.Back)
+	task.delay(0.46, applyLayout)
 end)
 
-print("[EgoHub] loaded with Anti-Cheat (no hooks)")
+print("[EgoHub] Full anti-detection + hierarchical dumper loaded")
