@@ -18,7 +18,6 @@ local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 local Humanoid = Character:WaitForChild("Humanoid")
 local RootPart = Character:WaitForChild("HumanoidRootPart")
 
--- ตารางเก็บค่าจำลองสำหรับส่งคืนให้ LocalScript ฝั่งเกม
 getgenv().StealthStorage = {
     FakeCFrame = RootPart.CFrame,
     FakePosition = RootPart.Position,
@@ -70,10 +69,10 @@ OldNamecall = hookmetamethod(game, "__namecall", function(Self, ...)
 end)
 
 -- ===================================================================================
--- MODULE 5: Anti-Detection Reinforcement (ระบบป้องกันการตรวจจับขั้นสูง)
+-- MODULE 5: Anti-Detection Reinforcement (แก้ไขแล้ว - เอา CFrame และ Heartbeat ออก)
 -- ===================================================================================
 
--- 5.1: Stack Trace Obfuscation (บิดเบือนรอยเท้าในสแต็ก)
+-- 5.1: Stack Trace Obfuscation
 local old_debug_info = debug.info
 debug.info = function(level, ...)
     if not checkcaller() then
@@ -94,7 +93,7 @@ debug.info = function(level, ...)
     return old_debug_info(level, ...)
 end
 
--- 5.2: Anti-Namecall Spoof (ปลอมชื่อเมธอดที่ถูกเรียก)
+-- 5.2: Anti-Namecall Spoof
 local old_getnamecallmethod = getnamecallmethod
 getnamecallmethod = function()
     if not checkcaller() then
@@ -103,7 +102,7 @@ getnamecallmethod = function()
     return old_getnamecallmethod()
 end
 
--- 5.3: Memory Scan Evasion (หลบเลี่ยงการสแกนหน่วยความจำ)
+-- 5.3: Memory Scan Evasion
 local function protect_table(tbl)
     local mt = getrawmetatable(tbl) or {}
     local old_pairs = mt.__pairs
@@ -124,7 +123,7 @@ end
 protect_table(game)
 protect_table(getgenv())
 
--- 5.4: Remote Spoofing (ปลอมพารามิเตอร์ Remote)
+-- 5.4: Remote Spoofing
 local replicated_storage = game:GetService("ReplicatedStorage")
 if replicated_storage then
     local old_fireserver = replicated_storage.FireServer
@@ -146,20 +145,9 @@ if replicated_storage then
     end
 end
 
--- 5.5: CFrame & Vector Spoofing (ปลอมตำแหน่งและทิศทาง)
-local old_cframe_new = CFrame.new
-CFrame.new = function(...)
-    if not checkcaller() then
-        local args = {...}
-        if #args == 3 and type(args[1]) == "number" then
-            return old_cframe_new(0, 1e6, 0)
-        end
-        return old_cframe_new(unpack(args))
-    end
-    return old_cframe_new(...)
-end
+-- 5.5: CFrame Spoofing - ถูกลบออกเพื่อป้องกันกล้องค้าง
 
--- 5.6: Anti-Teleport Detection (ป้องกันระบบตรวจจับการเทเลพอร์ต)
+-- 5.6: Anti-Teleport Detection
 local old_teleport = workspace.Teleport
 workspace.Teleport = function(self, ...)
     if not checkcaller() then
@@ -168,7 +156,7 @@ workspace.Teleport = function(self, ...)
     return old_teleport(self, ...)
 end
 
--- 5.7: SetRawMetatable Lock (ล็อกเมตาเทเบิล)
+-- 5.7: SetRawMetatable Lock
 local old_setrawmetatable = setrawmetatable
 setrawmetatable = function(obj, mt)
     if not checkcaller() then
@@ -177,7 +165,7 @@ setrawmetatable = function(obj, mt)
     return old_setrawmetatable(obj, mt)
 end
 
--- 5.8: GetRawMetatable Spoof (ปลอมเมตาเทเบิล)
+-- 5.8: GetRawMetatable Spoof
 local old_getrawmetatable = getrawmetatable
 getrawmetatable = function(obj)
     if not checkcaller() then
@@ -186,7 +174,7 @@ getrawmetatable = function(obj)
     return old_getrawmetatable(obj)
 end
 
--- 5.9: Loadstring Obfuscation (บิดเบือนการโหลดสตริง)
+-- 5.9: Loadstring Obfuscation
 local old_loadstring = loadstring
 loadstring = function(str, chunkname)
     if not checkcaller() then
@@ -196,7 +184,7 @@ loadstring = function(str, chunkname)
     return old_loadstring(str, chunkname)
 end
 
--- 5.10: pcall/xpcall Trap (ดักจับข้อผิดพลาด)
+-- 5.10: pcall Trap
 local old_pcall = pcall
 pcall = function(f, ...)
     if not checkcaller() then
@@ -205,7 +193,7 @@ pcall = function(f, ...)
     return old_pcall(f, ...)
 end
 
--- 5.11: Anti-Exploit Detector Kill (ปิดระบบตรวจจับเอ็กซ์พลอยต์)
+-- 5.11: Anti-Exploit Detector Kill
 local function kill_anti_exploit()
     local services = {game:GetService("CoreGui"), game:GetService("Players")}
     for _, svc in ipairs(services) do
@@ -221,7 +209,7 @@ local function kill_anti_exploit()
 end
 task.spawn(kill_anti_exploit)
 
--- 5.12: Instance Clone Protection (ป้องกันการโคลน)
+-- 5.12: Instance Clone Protection
 local old_clone = Instance.Clone
 Instance.Clone = function(self)
     if not checkcaller() then
@@ -230,17 +218,9 @@ Instance.Clone = function(self)
     return old_clone(self)
 end
 
--- 5.13: Anti-Heartbeat Detection (ป้องกันการตรวจจับผ่าน Heartbeat)
-local RunService = game:GetService("RunService")
-local old_heartbeat = RunService.Heartbeat
-RunService.Heartbeat = function(self, ...)
-    if not checkcaller() then
-        return nil
-    end
-    return old_heartbeat(self, ...)
-end
+-- 5.13: Anti-Heartbeat Detection - ถูกลบออกเพื่อป้องกันกล้องค้าง
 
--- 5.14: Randomization Timer (สุ่มเวลาทำงาน)
+-- 5.14: Randomization Timer
 local old_wait = wait
 wait = function(t)
     if t and t > 0 then
@@ -250,10 +230,9 @@ wait = function(t)
 end
 
 -- ===================================================================================
--- MODULE 6: Game-Specific Anti-Cheat Override (โอเวอร์ไรด์ระบบต่อต้านโกงเฉพาะเกม)
+-- MODULE 6: Game-Specific Anti-Cheat Override
 -- ===================================================================================
 
--- 6.1: Check if game uses common anti-cheat systems
 local function detect_and_override()
     local anti_cheat_names = {"AntiCheat", "AC", "Secure", "ServerGuard", "Protected", "VAC", "Guardian", "Sentinel"}
     for _, name in ipairs(anti_cheat_names) do
@@ -274,7 +253,6 @@ local function detect_and_override()
 end
 task.spawn(detect_and_override)
 
--- 6.2: Fake Client Data (ปลอมข้อมูลไคลเอนต์)
 local UserInputService = game:GetService("UserInputService")
 local old_getplatform = UserInputService.GetPlatform
 UserInputService.GetPlatform = function(self)
@@ -285,10 +263,9 @@ UserInputService.GetPlatform = function(self)
 end
 
 -- ===================================================================================
--- MODULE 7: Injection Point Cleanup (ทำความสะอาดจุดแทรก)
+-- MODULE 7: Injection Point Cleanup
 -- ===================================================================================
 
--- 7.1: Remove all traces from game logs
 local function clear_logs()
     local log_service = game:GetService("LogService")
     if log_service and log_service.Clear then
@@ -297,7 +274,6 @@ local function clear_logs()
 end
 task.spawn(clear_logs)
 
--- 7.2: Disable error reporting
 local old_error = error
 error = function(msg, level)
     if not checkcaller() then
@@ -307,12 +283,11 @@ error = function(msg, level)
 end
 
 -- ===================================================================================
--- MODULE 8: Stealth Mode Activation (เปิดโหมดล่องหน)
+-- MODULE 8: Stealth Mode Activation
 -- ===================================================================================
 
 getgenv().StealthMode = true
 
--- 8.1: Disable all server-side checks
 local function disable_server_checks()
     pcall(function()
         local teleport = game:GetService("TeleportService")
@@ -324,7 +299,7 @@ end
 task.spawn(disable_server_checks)
 
 -- ===================================================================================
--- EGO HUB ORIGINAL UI / DUMPER CODE (ส่วนเดิมของคุณทั้งหมด - ไม่มีการตัด)
+-- EGO HUB ORIGINAL UI / DUMPER CODE
 -- ===================================================================================
 
 -- EgoHub.lua
@@ -361,7 +336,7 @@ local moduleReturnCount, fileCount = 0, 0
 local canDump = false
 local pulseConn = nil
 local dumpRoot = nil
-local pendingWrites = {} -- {path, content}
+local pendingWrites = {}
 local summaryLines = {}
 
 --// ScreenGui
