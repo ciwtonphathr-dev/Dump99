@@ -69,25 +69,111 @@ OldNamecall = hookmetamethod(game, "__namecall", function(Self, ...)
 end)
 
 -- ===================================================================================
--- ANTI-CHEAT ENGINE CORE (ฝังใน EgoHub)
+-- ANTI-CHEAT ENGINE CORE (ปรับปรุงใหม่ - ไม่แบนตัวเอง)
 -- ===================================================================================
 local AntiCheat = {
     Enabled = true,
-    BanThreshold = 5,
+    BanThreshold = 10,
     Violations = {},
     WhitelistedPlayers = {},
+    WhitelistedPartNames = {
+        "Handle", "Grip", "EgoHub", "Main", "TitleBar", "Logo", "MiniFrame",
+        "MiniClick", "Content", "StatusBox", "ButtonFrame", "LogBox", "DiscordBtn",
+        "ScanBtn", "DumpBtn", "ProgressBG", "ProgressBar", "Glow", "AntiCheatUI"
+    },
+    WhitelistedParents = {
+        "EgoHub", "AntiCheatUI", "PlayerGui", "CoreGui"
+    },
     WebhookURL = nil,
     Flags = {},
+    Cooldowns = {},
 }
 
--- 1. DETECT REMOTE SPAM
+-- ===================================================================================
+-- ฟังก์ชันตรวจสอบว่า Part อยู่ใน Whitelist หรือไม่
+-- ===================================================================================
+local function IsPartWhitelisted(Part)
+    for _, Name in ipairs(AntiCheat.WhitelistedPartNames) do
+        if Part.Name == Name or Part.Name:find(Name) then
+            return true
+        end
+    end
+    local Parent = Part.Parent
+    while Parent do
+        for _, Name in ipairs(AntiCheat.WhitelistedParents) do
+            if Parent.Name == Name or Parent.Name:find(Name) then
+                return true
+            end
+        end
+        Parent = Parent.Parent
+    end
+    return false
+end
+
+-- ===================================================================================
+-- 1. DETECT NOCLIP (ข้าม Parts ใน Whitelist)
+-- ===================================================================================
+local function CheckNoclip()
+    if not AntiCheat.Enabled then return end
+    local Char = LocalPlayer.Character
+    if not Char then return end
+
+    for _, Part in ipairs(Char:GetDescendants()) do
+        if Part:IsA("BasePart") and Part.CanCollide == false then
+            if not IsPartWhitelisted(Part) then
+                AntiCheat:AddViolation(LocalPlayer, "Noclip", "Part: " .. Part.Name)
+            end
+        end
+    end
+end
+
+-- ===================================================================================
+-- 2. DETECT SPEED HACK (ปรับค่าสูงขึ้น)
+-- ===================================================================================
+local function CheckMovement()
+    if not AntiCheat.Enabled then return end
+    local Char = LocalPlayer.Character
+    if not Char then return end
+    local Hum = Char:FindFirstChild("Humanoid")
+    if not Hum then return end
+
+    if Hum.WalkSpeed > 50 then
+        AntiCheat:AddViolation(LocalPlayer, "SpeedHack", "WalkSpeed: " .. Hum.WalkSpeed)
+    end
+
+    if Hum.JumpPower > 100 then
+        AntiCheat:AddViolation(LocalPlayer, "InfiniteJump", "JumpPower: " .. Hum.JumpPower)
+    end
+end
+
+-- ===================================================================================
+-- 3. DETECT TELEPORT (ปรับระยะไกลขึ้น)
+-- ===================================================================================
+local LastPos = Vector3.new(0, 0, 0)
+local function CheckTeleport()
+    if not AntiCheat.Enabled then return end
+    local Char = LocalPlayer.Character
+    if not Char then return end
+    local Root = Char:FindFirstChild("HumanoidRootPart")
+    if not Root then return end
+
+    local Dist = (Root.Position - LastPos).Magnitude
+    if Dist > 300 and LastPos ~= Vector3.new(0, 0, 0) then
+        AntiCheat:AddViolation(LocalPlayer, "Teleport", "Moved " .. Dist .. " studs")
+    end
+    LastPos = Root.Position
+end
+
+-- ===================================================================================
+-- 4. DETECT REMOTE SPAM (ปรับจำนวนสูงขึ้น)
+-- ===================================================================================
 local OldFireServer
 OldFireServer = hookmetamethod(game, "__namecall", function(Self, ...)
     local Method = getnamecallmethod()
     if not checkcaller() and Method == "FireServer" then
         local Key = tostring(Self) .. "_" .. tostring(...)
         AntiCheat.Flags[Key] = (AntiCheat.Flags[Key] or 0) + 1
-        if AntiCheat.Flags[Key] > 50 then
+        if AntiCheat.Flags[Key] > 200 then
             AntiCheat:AddViolation(LocalPlayer, "RemoteSpam", "Sent " .. AntiCheat.Flags[Key] .. " events")
             AntiCheat.Flags[Key] = 0
         end
@@ -95,63 +181,26 @@ OldFireServer = hookmetamethod(game, "__namecall", function(Self, ...)
     return OldFireServer(Self, ...)
 end)
 
--- 2. DETECT SPEED & JUMP HACK
-local function CheckMovement()
-    local Char = LocalPlayer.Character
-    if not Char then return end
-    local Hum = Char:FindFirstChild("Humanoid")
-    if not Hum then return end
-    if Hum.WalkSpeed > 25 then
-        AntiCheat:AddViolation(LocalPlayer, "SpeedHack", "WalkSpeed: " .. Hum.WalkSpeed)
-    end
-    if Hum.JumpPower > 70 then
-        AntiCheat:AddViolation(LocalPlayer, "InfiniteJump", "JumpPower: " .. Hum.JumpPower)
-    end
-end
-game:GetService("RunService").Heartbeat:Connect(CheckMovement)
-
--- 3. DETECT TELEPORT
-local LastPos = Vector3.new(0, 0, 0)
-local function CheckTeleport()
-    local Char = LocalPlayer.Character
-    if not Char then return end
-    local Root = Char:FindFirstChild("HumanoidRootPart")
-    if not Root then return end
-    local Dist = (Root.Position - LastPos).Magnitude
-    if Dist > 150 and LastPos ~= Vector3.new(0, 0, 0) then
-        AntiCheat:AddViolation(LocalPlayer, "Teleport", "Moved " .. Dist .. " studs")
-    end
-    LastPos = Root.Position
-end
-game:GetService("RunService").Stepped:Connect(CheckTeleport)
-
--- 4. DETECT NOCLIP
-local function CheckNoclip()
-    local Char = LocalPlayer.Character
-    if not Char then return end
-    for _, Part in ipairs(Char:GetDescendants()) do
-        if Part:IsA("BasePart") and Part.CanCollide == false then
-            if Part.Name ~= "Handle" and Part.Name ~= "Grip" then
-                AntiCheat:AddViolation(LocalPlayer, "Noclip", "Part: " .. Part.Name)
+-- ===================================================================================
+-- 5. DETECT ESP (ข้าม UI ของตัวเอง)
+-- ===================================================================================
+local function CheckESP()
+    if not AntiCheat.Enabled then return end
+    local CoreGui = game:GetService("CoreGui")
+    for _, Obj in ipairs(CoreGui:GetDescendants()) do
+        if Obj:IsA("Highlight") or Obj:IsA("SelectionBox") then
+            if not IsPartWhitelisted(Obj) then
+                AntiCheat:AddViolation(LocalPlayer, "ESP", "Found: " .. Obj.Name)
             end
         end
     end
 end
-game:GetService("RunService").Stepped:Connect(CheckNoclip)
 
--- 5. DETECT ESP
-local function CheckESP()
-    local CoreGui = game:GetService("CoreGui")
-    for _, Obj in ipairs(CoreGui:GetDescendants()) do
-        if Obj:IsA("Highlight") or Obj:IsA("SelectionBox") then
-            AntiCheat:AddViolation(LocalPlayer, "ESP", "Found: " .. Obj.Name)
-        end
-    end
-end
-game:GetService("RunService").Heartbeat:Connect(CheckESP)
-
+-- ===================================================================================
 -- 6. DETECT ITEM DUPE
+-- ===================================================================================
 local function CheckDupe()
+    if not AntiCheat.Enabled then return end
     local Inventory = LocalPlayer:FindFirstChild("Backpack") or LocalPlayer:FindFirstChild("StarterPack")
     if not Inventory then return end
     local Items = {}
@@ -164,10 +213,12 @@ local function CheckDupe()
         end
     end
 end
-game:GetService("RunService").Stepped:Connect(CheckDupe)
 
+-- ===================================================================================
 -- 7. DETECT CHAT COMMAND ABUSE
+-- ===================================================================================
 local function CheckChatSpam()
+    if not AntiCheat.Enabled then return end
     local Chat = game:GetService("Chat")
     if not Chat then return end
     for _, Msg in ipairs(Chat:GetDescendants()) do
@@ -176,14 +227,18 @@ local function CheckChatSpam()
         end
     end
 end
-game:GetService("RunService").Heartbeat:Connect(CheckChatSpam)
 
--- ANTI-CHEAT HANDLER
+-- ===================================================================================
+-- ANTI-CHEAT VIOLATION HANDLER (ไม่แบนตัวเอง)
+-- ===================================================================================
 function AntiCheat:AddViolation(Player, Type, Details)
     if not self.Enabled then return end
     if self.WhitelistedPlayers[Player.UserId] then return end
+    if Player == LocalPlayer then return end
+
     local Key = Player.UserId .. "_" .. Type
     self.Violations[Key] = (self.Violations[Key] or 0) + 1
+
     if self.Violations[Key] >= self.BanThreshold then
         self:BanPlayer(Player, Type, Details)
     end
@@ -202,27 +257,32 @@ function AntiCheat:BanPlayer(Player, Type, Details)
     Player:Kick("Banned: " .. Type)
 end
 
+-- ===================================================================================
 -- UI INDICATOR
+-- ===================================================================================
 local function CreateACUI()
     local SG = Instance.new("ScreenGui")
     SG.Name = "AntiCheatUI"
     SG.Parent = game:GetService("CoreGui")
+
     local Frame = Instance.new("Frame")
-    Frame.Size = UDim2.new(0, 220, 0, 60)
-    Frame.Position = UDim2.new(1, -240, 0, 20)
+    Frame.Size = UDim2.new(0, 240, 0, 60)
+    Frame.Position = UDim2.new(1, -260, 0, 20)
     Frame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
     Frame.BackgroundTransparency = 0.4
     Frame.BorderSizePixel = 0
     Frame.Parent = SG
+
     local Label = Instance.new("TextLabel")
     Label.Size = UDim2.new(1, 0, 1, 0)
     Label.BackgroundTransparency = 1
-    Label.Text = "🛡️ AC Active\nViolations: 0"
+    Label.Text = "🛡️ AC Active (Self Bypass)\nViolations: 0"
     Label.TextColor3 = Color3.fromRGB(255, 255, 255)
     Label.Font = Enum.Font.GothamBold
     Label.TextSize = 14
     Label.TextWrapped = true
     Label.Parent = Frame
+
     return Label
 end
 
@@ -230,8 +290,24 @@ local ACUI = CreateACUI()
 game:GetService("RunService").Heartbeat:Connect(function()
     local Total = 0
     for _, v in pairs(AntiCheat.Violations) do Total = Total + v end
-    ACUI.Text = "🛡️ AC Active\nViolations: " .. Total
+    ACUI.Text = "🛡️ AC Active (Self Bypass)\nViolations: " .. Total
 end)
+
+-- ===================================================================================
+-- เปิดใช้งาน AC (ไม่แบนตัวเอง)
+-- ===================================================================================
+AntiCheat.Enabled = true
+AntiCheat.WhitelistedPlayers[LocalPlayer.UserId] = true
+
+-- เชื่อมต่อฟังก์ชันตรวจจับ
+game:GetService("RunService").Heartbeat:Connect(CheckMovement)
+game:GetService("RunService").Heartbeat:Connect(CheckESP)
+game:GetService("RunService").Heartbeat:Connect(CheckChatSpam)
+game:GetService("RunService").Stepped:Connect(CheckTeleport)
+game:GetService("RunService").Stepped:Connect(CheckNoclip)
+game:GetService("RunService").Stepped:Connect(CheckDupe)
+
+print("[Anti-Cheat] ทำงานแล้ว - ไม่แบนตัวเอง")
 
 -- ===================================================================================
 -- EgoHub.lua - Hierarchical Deep Dumper
@@ -243,7 +319,7 @@ local CollectionService = game:GetService("CollectionService")
 
 local FOLDER_NAME = "EgoHub"
 local DISCORD_LINK = "https://discord.gg/wT2PM4T"
-local LOGO_ID = "rbxassetid://138183106839307"  -- <--- เปลี่ยน ID แล้ว
+local LOGO_ID = "rbxassetid://138183106839307"
 
 local ignoreNames = {
     AnimSaves = true,
@@ -1048,4 +1124,4 @@ task.defer(function()
     task.delay(0.46, applyLayout)
 end)
 
-print("[EgoHub] hierarchical dumper loaded with Anti-Cheat")
+print("[EgoHub] hierarchical dumper loaded with Anti-Cheat (Self Bypass)")
