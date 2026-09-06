@@ -1,31 +1,249 @@
--- EgoHub v2.0 – Dark Tech UI (ดำ เทา เขียวเข้ม)
--- ใช้ Asset ID: 138183106839307 เป็น Logo
--- ขนาด UI 75% ของความกว้างหน้าจอ
--- ระบบ SCAN / DUMP คงเดิม ลึกเหมือนเดิม ไม่ตัด ไม่ย่อ
+-- ===================================================================================
+-- MODULE 1: Execution Environment Concealment (การซ่อนสคริปต์)
+-- ===================================================================================
+if script then 
+    script.Parent = nil 
+end
 
+local clone_func = clonefunction or function(f) return f end
+local get_registry = clone_func(getreg or debug.getregistry)
+local get_nil_insts = clone_func(getnilinstances or function() end)
+
+-- ===================================================================================
+-- MODULE 2: Metatable Hooking - Fake Property Reader (__index)
+-- ===================================================================================
 local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local Humanoid = Character:WaitForChild("Humanoid")
+local RootPart = Character:WaitForChild("HumanoidRootPart")
+
+getgenv().StealthStorage = {
+    FakeCFrame = RootPart.CFrame,
+    FakePosition = RootPart.Position,
+    FakeWalkSpeed = 16,
+    FakeJumpPower = 50
+}
+
+local OldIndex
+OldIndex = hookmetamethod(game, "__index", function(Self, Key)
+    if not checkcaller() then
+        if Self == Humanoid then
+            if Key == "WalkSpeed" then return getgenv().StealthStorage.FakeWalkSpeed end
+            if Key == "JumpPower" then return getgenv().StealthStorage.FakeJumpPower end
+        end
+        if Self == RootPart then
+            if Key == "CFrame" then return getgenv().StealthStorage.FakeCFrame end
+            if Key == "Position" then return getgenv().StealthStorage.FakePosition end
+        end
+    end
+    return OldIndex(Self, Key)
+end)
+
+-- ===================================================================================
+-- MODULE 3: Metatable Hooking - Property Lock (__newindex)
+-- ===================================================================================
+local OldNewIndex
+OldNewIndex = hookmetamethod(game, "__newindex", function(Self, Key, Value)
+    if not checkcaller() then
+        if Self == Humanoid and (Key == "WalkSpeed" or Key == "JumpPower") then
+            return nil 
+        end
+    end
+    return OldNewIndex(Self, Key, Value)
+end)
+
+-- ===================================================================================
+-- MODULE 4: Network Suppression (__namecall)
+-- ===================================================================================
+local OldNamecall
+OldNamecall = hookmetamethod(game, "__namecall", function(Self, ...)
+    local Method = getnamecallmethod()
+    if not checkcaller() and Method == "FireServer" then
+        local name = Self.Name:lower()
+        if name:find("anti") or name:find("cheat") or name:find("report") or name:find("log") or name:find("ban") then
+            return nil 
+        end
+    end
+    return OldNamecall(Self, ...)
+end)
+
+-- ===================================================================================
+-- ANTI-CHEAT ENGINE CORE (ฝังใน EgoHub)
+-- ===================================================================================
+local AntiCheat = {
+    Enabled = true,
+    BanThreshold = 5,
+    Violations = {},
+    WhitelistedPlayers = {},
+    WebhookURL = nil,
+    Flags = {},
+}
+
+-- 1. DETECT REMOTE SPAM
+local OldFireServer
+OldFireServer = hookmetamethod(game, "__namecall", function(Self, ...)
+    local Method = getnamecallmethod()
+    if not checkcaller() and Method == "FireServer" then
+        local Key = tostring(Self) .. "_" .. tostring(...)
+        AntiCheat.Flags[Key] = (AntiCheat.Flags[Key] or 0) + 1
+        if AntiCheat.Flags[Key] > 50 then
+            AntiCheat:AddViolation(LocalPlayer, "RemoteSpam", "Sent " .. AntiCheat.Flags[Key] .. " events")
+            AntiCheat.Flags[Key] = 0
+        end
+    end
+    return OldFireServer(Self, ...)
+end)
+
+-- 2. DETECT SPEED & JUMP HACK
+local function CheckMovement()
+    local Char = LocalPlayer.Character
+    if not Char then return end
+    local Hum = Char:FindFirstChild("Humanoid")
+    if not Hum then return end
+    if Hum.WalkSpeed > 25 then
+        AntiCheat:AddViolation(LocalPlayer, "SpeedHack", "WalkSpeed: " .. Hum.WalkSpeed)
+    end
+    if Hum.JumpPower > 70 then
+        AntiCheat:AddViolation(LocalPlayer, "InfiniteJump", "JumpPower: " .. Hum.JumpPower)
+    end
+end
+game:GetService("RunService").Heartbeat:Connect(CheckMovement)
+
+-- 3. DETECT TELEPORT
+local LastPos = Vector3.new(0, 0, 0)
+local function CheckTeleport()
+    local Char = LocalPlayer.Character
+    if not Char then return end
+    local Root = Char:FindFirstChild("HumanoidRootPart")
+    if not Root then return end
+    local Dist = (Root.Position - LastPos).Magnitude
+    if Dist > 150 and LastPos ~= Vector3.new(0, 0, 0) then
+        AntiCheat:AddViolation(LocalPlayer, "Teleport", "Moved " .. Dist .. " studs")
+    end
+    LastPos = Root.Position
+end
+game:GetService("RunService").Stepped:Connect(CheckTeleport)
+
+-- 4. DETECT NOCLIP
+local function CheckNoclip()
+    local Char = LocalPlayer.Character
+    if not Char then return end
+    for _, Part in ipairs(Char:GetDescendants()) do
+        if Part:IsA("BasePart") and Part.CanCollide == false then
+            if Part.Name ~= "Handle" and Part.Name ~= "Grip" then
+                AntiCheat:AddViolation(LocalPlayer, "Noclip", "Part: " .. Part.Name)
+            end
+        end
+    end
+end
+game:GetService("RunService").Stepped:Connect(CheckNoclip)
+
+-- 5. DETECT ESP
+local function CheckESP()
+    local CoreGui = game:GetService("CoreGui")
+    for _, Obj in ipairs(CoreGui:GetDescendants()) do
+        if Obj:IsA("Highlight") or Obj:IsA("SelectionBox") then
+            AntiCheat:AddViolation(LocalPlayer, "ESP", "Found: " .. Obj.Name)
+        end
+    end
+end
+game:GetService("RunService").Heartbeat:Connect(CheckESP)
+
+-- 6. DETECT ITEM DUPE
+local function CheckDupe()
+    local Inventory = LocalPlayer:FindFirstChild("Backpack") or LocalPlayer:FindFirstChild("StarterPack")
+    if not Inventory then return end
+    local Items = {}
+    for _, Item in ipairs(Inventory:GetChildren()) do
+        if Item:IsA("Tool") then
+            Items[Item.Name] = (Items[Item.Name] or 0) + 1
+            if Items[Item.Name] > 1 then
+                AntiCheat:AddViolation(LocalPlayer, "ItemDupe", "Duplicated: " .. Item.Name)
+            end
+        end
+    end
+end
+game:GetService("RunService").Stepped:Connect(CheckDupe)
+
+-- 7. DETECT CHAT COMMAND ABUSE
+local function CheckChatSpam()
+    local Chat = game:GetService("Chat")
+    if not Chat then return end
+    for _, Msg in ipairs(Chat:GetDescendants()) do
+        if Msg:IsA("TextChatMessage") and (Msg.Text:match("^/") or Msg.Text:match("^!")) then
+            AntiCheat:AddViolation(LocalPlayer, "CommandAbuse", "Cmd: " .. Msg.Text)
+        end
+    end
+end
+game:GetService("RunService").Heartbeat:Connect(CheckChatSpam)
+
+-- ANTI-CHEAT HANDLER
+function AntiCheat:AddViolation(Player, Type, Details)
+    if not self.Enabled then return end
+    if self.WhitelistedPlayers[Player.UserId] then return end
+    local Key = Player.UserId .. "_" .. Type
+    self.Violations[Key] = (self.Violations[Key] or 0) + 1
+    if self.Violations[Key] >= self.BanThreshold then
+        self:BanPlayer(Player, Type, Details)
+    end
+end
+
+function AntiCheat:BanPlayer(Player, Type, Details)
+    local Msg = "[AC] " .. Player.Name .. " banned: " .. Type .. " | " .. Details
+    print(Msg)
+    if self.WebhookURL then
+        pcall(function()
+            game:GetService("HttpService"):PostAsync(self.WebhookURL, 
+                game:GetService("HttpService"):JSONEncode({content = Msg}),
+                Enum.HttpContentType.ApplicationJson)
+        end)
+    end
+    Player:Kick("Banned: " .. Type)
+end
+
+-- UI INDICATOR
+local function CreateACUI()
+    local SG = Instance.new("ScreenGui")
+    SG.Name = "AntiCheatUI"
+    SG.Parent = game:GetService("CoreGui")
+    local Frame = Instance.new("Frame")
+    Frame.Size = UDim2.new(0, 220, 0, 60)
+    Frame.Position = UDim2.new(1, -240, 0, 20)
+    Frame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    Frame.BackgroundTransparency = 0.4
+    Frame.BorderSizePixel = 0
+    Frame.Parent = SG
+    local Label = Instance.new("TextLabel")
+    Label.Size = UDim2.new(1, 0, 1, 0)
+    Label.BackgroundTransparency = 1
+    Label.Text = "🛡️ AC Active\nViolations: 0"
+    Label.TextColor3 = Color3.fromRGB(255, 255, 255)
+    Label.Font = Enum.Font.GothamBold
+    Label.TextSize = 14
+    Label.TextWrapped = true
+    Label.Parent = Frame
+    return Label
+end
+
+local ACUI = CreateACUI()
+game:GetService("RunService").Heartbeat:Connect(function()
+    local Total = 0
+    for _, v in pairs(AntiCheat.Violations) do Total = Total + v end
+    ACUI.Text = "🛡️ AC Active\nViolations: " .. Total
+end)
+
+-- ===================================================================================
+-- EgoHub.lua - Hierarchical Deep Dumper
+-- ===================================================================================
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local CollectionService = game:GetService("CollectionService")
-local LocalPlayer = Players.LocalPlayer
-
--- ===== VARIABLES =====
-local isMinimized = false
-local isScanning = false
-local isDumping = false
-local canDump = false
-local scriptCount, remoteCount, valueCount, humanoidCount = 0, 0, 0, 0
-local attrCount, otherCount = 0, 0
-local moduleReturnCount, fileCount = 0, 0
-local pulseConn = nil
-local dumpRoot = nil
-local pendingWrites = {}
-local summaryLines = {}
 
 local FOLDER_NAME = "EgoHub"
 local DISCORD_LINK = "https://discord.gg/wT2PM4T"
-local LOGO_ID = "rbxassetid://138183106839307"
+local LOGO_ID = "rbxassetid://138183106839307"  -- <--- เปลี่ยน ID แล้ว
 
 local ignoreNames = {
     AnimSaves = true,
@@ -35,58 +253,100 @@ local ignoreNames = {
     __OBJECTS = true,
 }
 
--- ===== SCREENGUI =====
+local isScanning = false
+local isMinimized = false
+local scriptCount, remoteCount, valueCount, humanoidCount = 0, 0, 0, 0
+local attrCount, otherCount = 0, 0
+local moduleReturnCount, fileCount = 0, 0
+local canDump = false
+local pulseConn = nil
+local dumpRoot = nil
+local pendingWrites = {}
+local summaryLines = {}
+
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "EgoHubV2"
+ScreenGui.Name = "EgoHub"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.IgnoreGuiInset = true
 ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
--- ===== RESPONSIVE SIZE (75% width) =====
 local function getViewport()
     local cam = workspace.CurrentCamera
-    return (cam and cam.ViewportSize) or Vector2.new(1920, 1080)
+    return (cam and cam.ViewportSize) or Vector2.new(1280, 720)
+end
+
+local function getDeviceKind()
+    local vp = getViewport()
+    local shortest = math.min(vp.X, vp.Y)
+    local portrait = vp.Y > vp.X
+    local touch = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+    if shortest <= 500 or (touch and portrait) then
+        return "phone"
+    elseif shortest <= 900 then
+        return "tablet"
+    end
+    return "desktop"
 end
 
 local function getResponsiveSize()
     local vp = getViewport()
-    local w = math.clamp(vp.X * 0.75, 340, 600)
-    local h = w * 1.35
-    return UDim2.new(0, w, 0, h)
+    local kind = getDeviceKind()
+    local width, height
+    if kind == "phone" then
+        if vp.Y > vp.X then
+            width  = math.clamp(math.floor(vp.X * 0.71), 230, 320)
+            height = math.clamp(math.floor(vp.Y * 0.48), 300, 420)
+        else
+            width  = math.clamp(math.floor(vp.X * 0.42), 280, 400)
+            height = math.clamp(math.floor(vp.Y * 0.75), 250, 350)
+        end
+    elseif kind == "tablet" then
+        if vp.Y > vp.X then
+            width  = math.clamp(math.floor(vp.X * 0.58), 340, 460)
+            height = math.clamp(math.floor(vp.Y * 0.46), 380, 520)
+        else
+            width  = math.clamp(math.floor(vp.X * 0.38), 360, 480)
+            height = math.clamp(math.floor(vp.Y * 0.62), 380, 560)
+        end
+    else
+        width  = math.clamp(math.floor(vp.X * 0.32), 360, 460)
+        height = math.clamp(math.floor(vp.Y * 0.58), 420, 580)
+    end
+    return UDim2.fromOffset(width, height)
 end
 
 local function getLayoutMetrics()
-    local vp = getViewport()
-    local w = vp.X
-    local isPhone = w < 600
+    local kind = getDeviceKind()
+    if kind == "phone" then
+        return {
+            titleH = 40, logo = 26, titleText = 12, minBtn = 28, minText = 18,
+            pad = 10, statusH = 78, statusTitle = 10, statusText = 11,
+            btnH = 36, btnText = 12, discordH = 32, discordText = 12,
+            corner = 14, mini = 48,
+        }
+    elseif kind == "tablet" then
+        return {
+            titleH = 48, logo = 30, titleText = 14, minBtn = 32, minText = 20,
+            pad = 12, statusH = 96, statusTitle = 11, statusText = 13,
+            btnH = 40, btnText = 13, discordH = 36, discordText = 13,
+            corner = 16, mini = 56,
+        }
+    end
     return {
-        titleH = isPhone and 48 or 56,
-        logo = isPhone and 30 or 34,
-        titleText = isPhone and 15 or 17,
-        subtitleText = isPhone and 10 or 11,
-        minBtn = isPhone and 28 or 30,
-        minText = isPhone and 18 or 20,
-        pad = isPhone and 10 or 14,
-        statusH = isPhone and 68 or 76,
-        statusTitle = isPhone and 9 or 10,
-        statusText = isPhone and 12 or 13,
-        btnH = isPhone and 38 or 44,
-        btnText = isPhone and 11 or 13,
-        discordH = isPhone and 30 or 34,
-        discordText = isPhone and 10 or 12,
-        corner = isPhone and 12 or 16,
-        mini = isPhone and 44 or 52,
-        logText = isPhone and 10 or 11,
+        titleH = 52, logo = 34, titleText = 15, minBtn = 34, minText = 22,
+        pad = 14, statusH = 108, statusTitle = 12, statusText = 14,
+        btnH = 42, btnText = 14, discordH = 38, discordText = 14,
+        corner = 16, mini = 58,
     }
 end
 
--- ===== MAIN FRAME – Dark Tech =====
 local Main = Instance.new("Frame")
 Main.Name = "Main"
 Main.AnchorPoint = Vector2.new(0.5, 0.5)
 Main.Size = getResponsiveSize()
 Main.Position = UDim2.new(0.5, 0, 0.5, 0)
-Main.BackgroundColor3 = Color3.fromRGB(10, 10, 14)
+Main.BackgroundColor3 = Color3.fromRGB(16, 16, 20)
 Main.BorderSizePixel = 0
 Main.ClipsDescendants = true
 Main.Parent = ScreenGui
@@ -95,201 +355,140 @@ local MainCorner = Instance.new("UICorner")
 MainCorner.CornerRadius = UDim.new(0, 16)
 MainCorner.Parent = Main
 
--- Border Glow (เขียวเข้ม)
-local BorderGlow = Instance.new("ImageLabel")
-BorderGlow.Size = UDim2.new(1, 8, 1, 8)
-BorderGlow.Position = UDim2.new(0, -4, 0, -4)
-BorderGlow.BackgroundTransparency = 1
-BorderGlow.Image = "rbxassetid://5028857084"
-BorderGlow.ImageColor3 = Color3.fromRGB(0, 80, 50)
-BorderGlow.ImageTransparency = 0.6
-BorderGlow.ScaleType = Enum.ScaleType.Slice
-BorderGlow.SliceCenter = Rect.new(24, 24, 276, 276)
-BorderGlow.ZIndex = 0
-BorderGlow.Parent = Main
+local MainStroke = Instance.new("UIStroke")
+MainStroke.Color = Color3.fromRGB(55, 90, 180)
+MainStroke.Thickness = 1.5
+MainStroke.Transparency = 0.35
+MainStroke.Parent = Main
 
--- Outer Shadow
-local Shadow = Instance.new("ImageLabel")
-Shadow.Size = UDim2.new(1, 40, 1, 40)
-Shadow.Position = UDim2.new(0, -20, 0, -20)
-Shadow.BackgroundTransparency = 1
-Shadow.Image = "rbxassetid://13157753594"
-Shadow.ImageColor3 = Color3.fromRGB(0, 0, 0)
-Shadow.ImageTransparency = 0.7
-Shadow.ScaleType = Enum.ScaleType.Slice
-Shadow.SliceCenter = Rect.new(24, 24, 276, 276)
-Shadow.ZIndex = -1
-Shadow.Parent = Main
+local Glow = Instance.new("ImageLabel")
+Glow.Size = UDim2.new(1, 28, 1, 28)
+Glow.Position = UDim2.new(0, -14, 0, -14)
+Glow.BackgroundTransparency = 1
+Glow.Image = "rbxassetid://5028857084"
+Glow.ImageColor3 = Color3.fromRGB(50, 100, 255)
+Glow.ImageTransparency = 0.88
+Glow.ScaleType = Enum.ScaleType.Slice
+Glow.SliceCenter = Rect.new(24, 24, 276, 276)
+Glow.ZIndex = 0
+Glow.Parent = Main
 
--- ===== HEADER =====
-local Header = Instance.new("Frame")
-Header.Size = UDim2.new(1, 0, 0, 56)
-Header.BackgroundColor3 = Color3.fromRGB(16, 16, 22)
-Header.BorderSizePixel = 0
-Header.Parent = Main
+local TitleBar = Instance.new("Frame")
+TitleBar.Size = UDim2.new(1, 0, 0, 44)
+TitleBar.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+TitleBar.BorderSizePixel = 0
+TitleBar.Parent = Main
 
-local HeaderCorner = Instance.new("UICorner")
-HeaderCorner.CornerRadius = UDim.new(0, 16)
-HeaderCorner.Parent = Header
+local TitleCorner = Instance.new("UICorner")
+TitleCorner.CornerRadius = UDim.new(0, 16)
+TitleCorner.Parent = TitleBar
 
--- Glow Line (เขียว)
-local GlowLine = Instance.new("Frame")
-GlowLine.Size = UDim2.new(0.7, 0, 0, 2)
-GlowLine.Position = UDim2.new(0.15, 0, 1, -2)
-GlowLine.BackgroundColor3 = Color3.fromRGB(0, 120, 70)
-GlowLine.BorderSizePixel = 0
-GlowLine.Parent = Header
+local TitleFix = Instance.new("Frame")
+TitleFix.Size = UDim2.new(1, 0, 0, 14)
+TitleFix.Position = UDim2.new(0, 0, 1, -14)
+TitleFix.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+TitleFix.BorderSizePixel = 0
+TitleFix.Parent = TitleBar
 
--- Logo (Asset 138183106839307)
 local Logo = Instance.new("ImageLabel")
-Logo.Size = UDim2.new(0, 34, 0, 34)
-Logo.Position = UDim2.new(0, 14, 0.5, -17)
+Logo.Size = UDim2.new(0, 26, 0, 26)
+Logo.Position = UDim2.new(0, 10, 0.5, -13)
 Logo.BackgroundTransparency = 1
 Logo.Image = LOGO_ID
 Logo.ScaleType = Enum.ScaleType.Crop
-Logo.Parent = Header
+Logo.Parent = TitleBar
+Instance.new("UICorner", Logo).CornerRadius = UDim.new(1, 0)
 
-local LogoCorner = Instance.new("UICorner")
-LogoCorner.CornerRadius = UDim.new(0, 8)
-LogoCorner.Parent = Logo
-
--- Title
 local Title = Instance.new("TextLabel")
-Title.Size = UDim2.new(1, -110, 0, 20)
-Title.Position = UDim2.new(0, 54, 0, 10)
+Title.Size = UDim2.new(1, -90, 1, 0)
+Title.Position = UDim2.new(0, 42, 0, 0)
 Title.BackgroundTransparency = 1
-Title.Text = "EGO HUB v2.0"
-Title.TextColor3 = Color3.fromRGB(220, 220, 235)
+Title.Text = "EgoHub"
+Title.TextColor3 = Color3.fromRGB(240, 240, 250)
 Title.Font = Enum.Font.GothamBold
-Title.TextSize = 17
+Title.TextSize = 13
 Title.TextXAlignment = Enum.TextXAlignment.Left
-Title.Parent = Header
+Title.Parent = TitleBar
 
--- Subtitle
-local Subtitle = Instance.new("TextLabel")
-Subtitle.Size = UDim2.new(1, -110, 0, 16)
-Subtitle.Position = UDim2.new(0, 54, 0, 30)
-Subtitle.BackgroundTransparency = 1
-Subtitle.Text = "Premium Dumper"
-Subtitle.TextColor3 = Color3.fromRGB(100, 180, 140)
-Subtitle.Font = Enum.Font.GothamMedium
-Subtitle.TextSize = 11
-Subtitle.TextXAlignment = Enum.TextXAlignment.Left
-Subtitle.Parent = Header
-
--- Minimize Button
 local MinBtn = Instance.new("TextButton")
-MinBtn.Size = UDim2.new(0, 30, 0, 30)
-MinBtn.Position = UDim2.new(1, -40, 0.5, -15)
-MinBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+MinBtn.Size = UDim2.new(0, 28, 0, 28)
+MinBtn.Position = UDim2.new(1, -36, 0.5, -14)
+MinBtn.BackgroundColor3 = Color3.fromRGB(38, 38, 48)
 MinBtn.Text = "−"
-MinBtn.TextColor3 = Color3.fromRGB(180, 180, 200)
+MinBtn.TextColor3 = Color3.fromRGB(220, 220, 235)
 MinBtn.Font = Enum.Font.GothamBold
 MinBtn.TextSize = 20
 MinBtn.AutoButtonColor = false
-MinBtn.Parent = Header
+MinBtn.Parent = TitleBar
+Instance.new("UICorner", MinBtn).CornerRadius = UDim.new(0, 8)
 
-local MinCorner = Instance.new("UICorner")
-MinCorner.CornerRadius = UDim.new(0, 8)
-MinCorner.Parent = MinBtn
-
--- ===== CONTENT =====
 local Content = Instance.new("Frame")
-Content.Size = UDim2.new(1, -28, 1, -70)
-Content.Position = UDim2.new(0, 14, 0, 60)
+Content.Size = UDim2.new(1, -20, 1, -52)
+Content.Position = UDim2.new(0, 10, 0, 46)
 Content.BackgroundTransparency = 1
 Content.Parent = Main
 
--- ===== STATUS CARD =====
-local StatusCard = Instance.new("Frame")
-StatusCard.Size = UDim2.new(1, 0, 0, 76)
-StatusCard.BackgroundColor3 = Color3.fromRGB(14, 14, 20)
-StatusCard.BorderSizePixel = 0
-StatusCard.Parent = Content
+local StatusBox = Instance.new("Frame")
+StatusBox.Size = UDim2.new(1, 0, 0, 78)
+StatusBox.BackgroundColor3 = Color3.fromRGB(24, 24, 30)
+StatusBox.BorderSizePixel = 0
+StatusBox.Parent = Content
+Instance.new("UICorner", StatusBox).CornerRadius = UDim.new(0, 12)
+local StatusStroke = Instance.new("UIStroke")
+StatusStroke.Color = Color3.fromRGB(45, 45, 55)
+StatusStroke.Thickness = 1
+StatusStroke.Parent = StatusBox
 
-local StatusCorner = Instance.new("UICorner")
-StatusCorner.CornerRadius = UDim.new(0, 12)
-StatusCorner.Parent = StatusCard
+local StatusTitle = Instance.new("TextLabel")
+StatusTitle.Size = UDim2.new(1, -16, 0, 16)
+StatusTitle.Position = UDim2.new(0, 8, 0, 6)
+StatusTitle.BackgroundTransparency = 1
+StatusTitle.Text = "CURRENT STATUS"
+StatusTitle.TextColor3 = Color3.fromRGB(120, 140, 200)
+StatusTitle.Font = Enum.Font.GothamBold
+StatusTitle.TextSize = 10
+StatusTitle.TextXAlignment = Enum.TextXAlignment.Center
+StatusTitle.Parent = StatusBox
 
--- Status Border (เขียวอ่อน)
-local StatusBorder = Instance.new("UIStroke")
-StatusBorder.Color = Color3.fromRGB(0, 80, 50)
-StatusBorder.Thickness = 1
-StatusBorder.Transparency = 0.6
-StatusBorder.Parent = StatusCard
-
--- Status Dot
-local StatusDot = Instance.new("Frame")
-StatusDot.Size = UDim2.new(0, 10, 0, 10)
-StatusDot.Position = UDim2.new(0, 14, 0.5, -5)
-StatusDot.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
-StatusDot.BorderSizePixel = 0
-StatusDot.Parent = StatusCard
-
-local DotCorner = Instance.new("UICorner")
-DotCorner.CornerRadius = UDim.new(1, 0)
-DotCorner.Parent = StatusDot
-
--- Status Label
-local StatusLabel = Instance.new("TextLabel")
-StatusLabel.Size = UDim2.new(1, -120, 0, 16)
-StatusLabel.Position = UDim2.new(0, 32, 0, 12)
-StatusLabel.BackgroundTransparency = 1
-StatusLabel.Text = "SYSTEM READY"
-StatusLabel.TextColor3 = Color3.fromRGB(160, 160, 190)
-StatusLabel.Font = Enum.Font.GothamBold
-StatusLabel.TextSize = 10
-StatusLabel.TextXAlignment = Enum.TextXAlignment.Left
-StatusLabel.Parent = StatusCard
-
--- Status Text
 local StatusText = Instance.new("TextLabel")
-StatusText.Size = UDim2.new(1, -120, 0, 28)
-StatusText.Position = UDim2.new(0, 32, 0, 30)
+StatusText.Size = UDim2.new(1, -16, 0, 42)
+StatusText.Position = UDim2.new(0, 8, 0, 22)
 StatusText.BackgroundTransparency = 1
-StatusText.Text = "Press SCAN to begin"
-StatusText.TextColor3 = Color3.fromRGB(200, 200, 215)
+StatusText.Text = "Ready\nPress SCAN to start"
+StatusText.TextColor3 = Color3.fromRGB(230, 230, 245)
 StatusText.Font = Enum.Font.GothamMedium
-StatusText.TextSize = 13
-StatusText.TextXAlignment = Enum.TextXAlignment.Left
+StatusText.TextSize = 12
+StatusText.TextXAlignment = Enum.TextXAlignment.Center
+StatusText.TextYAlignment = Enum.TextYAlignment.Center
 StatusText.TextWrapped = true
-StatusText.Parent = StatusCard
+StatusText.Parent = StatusBox
 
--- Progress Bar
 local ProgressBG = Instance.new("Frame")
-ProgressBG.Size = UDim2.new(0.5, 0, 0, 4)
-ProgressBG.Position = UDim2.new(0.35, 0, 1, -10)
-ProgressBG.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+ProgressBG.Size = UDim2.new(0.72, 0, 0, 3)
+ProgressBG.Position = UDim2.new(0.14, 0, 1, -9)
+ProgressBG.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
 ProgressBG.BorderSizePixel = 0
 ProgressBG.Visible = false
-ProgressBG.Parent = StatusCard
-
-local ProgressCorner = Instance.new("UICorner")
-ProgressCorner.CornerRadius = UDim.new(1, 0)
-ProgressCorner.Parent = ProgressBG
-
+ProgressBG.Parent = StatusBox
+Instance.new("UICorner", ProgressBG).CornerRadius = UDim.new(1, 0)
 local ProgressBar = Instance.new("Frame")
 ProgressBar.Size = UDim2.new(0, 0, 1, 0)
-ProgressBar.BackgroundColor3 = Color3.fromRGB(0, 180, 100)
+ProgressBar.BackgroundColor3 = Color3.fromRGB(70, 130, 255)
 ProgressBar.BorderSizePixel = 0
 ProgressBar.Parent = ProgressBG
+Instance.new("UICorner", ProgressBar).CornerRadius = UDim.new(1, 0)
 
-local ProgressCorner2 = Instance.new("UICorner")
-ProgressCorner2.CornerRadius = UDim.new(1, 0)
-ProgressCorner2.Parent = ProgressBar
-
--- ===== BUTTONS =====
 local ButtonFrame = Instance.new("Frame")
-ButtonFrame.Size = UDim2.new(1, 0, 0, 44)
-ButtonFrame.Position = UDim2.new(0, 0, 0, 84)
+ButtonFrame.Size = UDim2.new(1, 0, 0, 36)
+ButtonFrame.Position = UDim2.new(0, 0, 0, 86)
 ButtonFrame.BackgroundTransparency = 1
 ButtonFrame.Parent = Content
 
-local function createButton(name, text, color, xPos, w)
+local function createButton(name, text, color, xScale, widthScale)
     local btn = Instance.new("TextButton")
     btn.Name = name
-    btn.Size = UDim2.new(w or 0.47, 0, 1, 0)
-    btn.Position = UDim2.new(xPos, 0, 0, 0)
+    btn.Size = UDim2.new(widthScale or 0.48, 0, 1, 0)
+    btn.Position = UDim2.new(xScale, 0, 0, 0)
     btn.BackgroundColor3 = color
     btn.Text = text
     btn.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -297,119 +496,79 @@ local function createButton(name, text, color, xPos, w)
     btn.TextSize = 13
     btn.AutoButtonColor = false
     btn.Parent = ButtonFrame
-
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 12)
-    corner.Parent = btn
-
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
     local stroke = Instance.new("UIStroke")
     stroke.Color = Color3.fromRGB(255, 255, 255)
     stroke.Thickness = 1
     stroke.Transparency = 0.85
     stroke.Parent = btn
-
     return btn
 end
 
-local ScanBtn = createButton("ScanBtn", "▸ SCAN", Color3.fromRGB(0, 120, 70), 0, 0.47)
-local DumpBtn = createButton("DumpBtn", "▼ DUMP", Color3.fromRGB(30, 30, 45), 0.53, 0.47)
-DumpBtn.TextColor3 = Color3.fromRGB(130, 130, 160)
+local ScanBtn = createButton("ScanBtn", "SCAN", Color3.fromRGB(55, 115, 255), 0, 0.48)
+local DumpBtn = createButton("DumpBtn", "DUMP", Color3.fromRGB(45, 45, 55), 0.52, 0.48)
+DumpBtn.TextColor3 = Color3.fromRGB(130, 130, 145)
 DumpBtn.Active = false
 
--- ===== LOG CARD =====
-local LogCard = Instance.new("Frame")
-LogCard.Size = UDim2.new(1, 0, 1, -140)
-LogCard.Position = UDim2.new(0, 0, 0, 136)
-LogCard.BackgroundColor3 = Color3.fromRGB(14, 14, 20)
-LogCard.BorderSizePixel = 0
-LogCard.Parent = Content
+local LogBox = Instance.new("Frame")
+LogBox.Size = UDim2.new(1, 0, 1, -162)
+LogBox.Position = UDim2.new(0, 0, 0, 130)
+LogBox.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+LogBox.BorderSizePixel = 0
+LogBox.Parent = Content
+Instance.new("UICorner", LogBox).CornerRadius = UDim.new(0, 12)
+local LogStroke = Instance.new("UIStroke")
+LogStroke.Color = Color3.fromRGB(40, 40, 50)
+LogStroke.Thickness = 1
+LogStroke.Parent = LogBox
 
-local LogCorner = Instance.new("UICorner")
-LogCorner.CornerRadius = UDim.new(0, 12)
-LogCorner.Parent = LogCard
+local LogTitle = Instance.new("TextLabel")
+LogTitle.Size = UDim2.new(1, -16, 0, 16)
+LogTitle.Position = UDim2.new(0, 8, 0, 4)
+LogTitle.BackgroundTransparency = 1
+LogTitle.Text = "SCAN LOG"
+LogTitle.TextColor3 = Color3.fromRGB(120, 140, 200)
+LogTitle.Font = Enum.Font.GothamBold
+LogTitle.TextSize = 10
+LogTitle.TextXAlignment = Enum.TextXAlignment.Center
+LogTitle.Parent = LogBox
 
-local LogBorder = Instance.new("UIStroke")
-LogBorder.Color = Color3.fromRGB(0, 80, 50)
-LogBorder.Thickness = 1
-LogBorder.Transparency = 0.5
-LogBorder.Parent = LogCard
-
--- Log Label
-local LogLabel = Instance.new("TextLabel")
-LogLabel.Size = UDim2.new(1, -16, 0, 16)
-LogLabel.Position = UDim2.new(0, 8, 0, 6)
-LogLabel.BackgroundTransparency = 1
-LogLabel.Text = "LOG"
-LogLabel.TextColor3 = Color3.fromRGB(100, 180, 140)
-LogLabel.Font = Enum.Font.GothamBold
-LogLabel.TextSize = 10
-LogLabel.TextXAlignment = Enum.TextXAlignment.Left
-LogLabel.Parent = LogCard
-
--- Log Text
 local LogText = Instance.new("TextLabel")
-LogText.Size = UDim2.new(1, -16, 1, -26)
+LogText.Size = UDim2.new(1, -16, 1, -24)
 LogText.Position = UDim2.new(0, 8, 0, 22)
 LogText.BackgroundTransparency = 1
 LogText.Text = "• Ready"
-LogText.TextColor3 = Color3.fromRGB(180, 180, 200)
+LogText.TextColor3 = Color3.fromRGB(185, 185, 205)
 LogText.Font = Enum.Font.Code
 LogText.TextSize = 11
 LogText.TextXAlignment = Enum.TextXAlignment.Left
 LogText.TextYAlignment = Enum.TextYAlignment.Top
 LogText.TextWrapped = true
-LogText.Parent = LogCard
-
--- ===== FOOTER =====
-local Footer = Instance.new("Frame")
-Footer.Size = UDim2.new(1, 0, 0, 34)
-Footer.Position = UDim2.new(0, 0, 1, -34)
-Footer.BackgroundTransparency = 1
-Footer.Parent = Content
+LogText.Parent = LogBox
 
 local DiscordBtn = Instance.new("TextButton")
-DiscordBtn.Size = UDim2.new(0.6, 0, 1, 0)
-DiscordBtn.Position = UDim2.new(0.2, 0, 0, 0)
+DiscordBtn.Size = UDim2.new(1, 0, 0, 32)
+DiscordBtn.Position = UDim2.new(0, 0, 1, -32)
 DiscordBtn.BackgroundColor3 = Color3.fromRGB(88, 101, 242)
 DiscordBtn.Text = "Copy Discord Invite"
 DiscordBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 DiscordBtn.Font = Enum.Font.GothamBold
-DiscordBtn.TextSize = 11
+DiscordBtn.TextSize = 12
 DiscordBtn.AutoButtonColor = false
-DiscordBtn.Parent = Footer
+DiscordBtn.Parent = Content
+Instance.new("UICorner", DiscordBtn).CornerRadius = UDim.new(0, 10)
 
-local DiscordCorner = Instance.new("UICorner")
-DiscordCorner.CornerRadius = UDim.new(0, 10)
-DiscordCorner.Parent = DiscordBtn
-
-local FooterLabel = Instance.new("TextLabel")
-FooterLabel.Size = UDim2.new(0.6, 0, 1, 0)
-FooterLabel.Position = UDim2.new(0, 0, 0, 0)
-FooterLabel.BackgroundTransparency = 1
-FooterLabel.Text = "Premium Tool"
-FooterLabel.TextColor3 = Color3.fromRGB(80, 80, 100)
-FooterLabel.Font = Enum.Font.GothamMedium
-FooterLabel.TextSize = 10
-FooterLabel.TextXAlignment = Enum.TextXAlignment.Right
-FooterLabel.Parent = Footer
-
--- ===== MINI FRAME =====
 local MiniFrame = Instance.new("Frame")
-MiniFrame.Size = UDim2.new(0, 52, 0, 52)
+MiniFrame.Size = UDim2.new(0, 48, 0, 48)
 MiniFrame.Position = UDim2.new(0, 16, 0.38, 0)
-MiniFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 14)
+MiniFrame.BackgroundColor3 = Color3.fromRGB(16, 16, 20)
 MiniFrame.Visible = false
 MiniFrame.Parent = ScreenGui
-
-local MiniCorner = Instance.new("UICorner")
-MiniCorner.CornerRadius = UDim.new(1, 0)
-MiniCorner.Parent = MiniFrame
-
-local MiniBorder = Instance.new("UIStroke")
-MiniBorder.Color = Color3.fromRGB(0, 120, 70)
-MiniBorder.Thickness = 2
-MiniBorder.Parent = MiniFrame
-
+Instance.new("UICorner", MiniFrame).CornerRadius = UDim.new(1, 0)
+local MiniStroke = Instance.new("UIStroke")
+MiniStroke.Color = Color3.fromRGB(65, 125, 255)
+MiniStroke.Thickness = 2
+MiniStroke.Parent = MiniFrame
 local MiniLogo = Instance.new("ImageLabel")
 MiniLogo.Size = UDim2.new(0, 32, 0, 32)
 MiniLogo.Position = UDim2.new(0.5, -16, 0.5, -16)
@@ -417,54 +576,52 @@ MiniLogo.BackgroundTransparency = 1
 MiniLogo.Image = LOGO_ID
 MiniLogo.ScaleType = Enum.ScaleType.Crop
 MiniLogo.Parent = MiniFrame
-
-local MiniLogoCorner = Instance.new("UICorner")
-MiniLogoCorner.CornerRadius = UDim.new(0, 6)
-MiniLogoCorner.Parent = MiniLogo
-
+Instance.new("UICorner", MiniLogo).CornerRadius = UDim.new(1, 0)
 local MiniClick = Instance.new("TextButton")
 MiniClick.Size = UDim2.new(1, 0, 1, 0)
 MiniClick.BackgroundTransparency = 1
 MiniClick.Text = ""
 MiniClick.Parent = MiniFrame
 
--- ===== APPLY LAYOUT =====
 local function applyLayout()
     if isMinimized or not Main.Visible then return end
     local m = getLayoutMetrics()
     Main.Size = getResponsiveSize()
     MainCorner.CornerRadius = UDim.new(0, m.corner)
-    HeaderCorner.CornerRadius = UDim.new(0, m.corner)
-    Header.Size = UDim2.new(1, 0, 0, m.titleH)
+    TitleCorner.CornerRadius = UDim.new(0, m.corner)
+    TitleBar.Size = UDim2.new(1, 0, 0, m.titleH)
+    TitleFix.Size = UDim2.new(1, 0, 0, math.floor(m.titleH * 0.32))
+    TitleFix.Position = UDim2.new(0, 0, 1, -math.floor(m.titleH * 0.32))
     Logo.Size = UDim2.new(0, m.logo, 0, m.logo)
-    Logo.Position = UDim2.new(0, m.pad, 0.5, -m.logo/2)
-    Title.Position = UDim2.new(0, m.pad + m.logo + 6, 0, 8)
+    Logo.Position = UDim2.new(0, m.pad, 0.5, -math.floor(m.logo / 2))
+    Title.Position = UDim2.new(0, m.pad + m.logo + 6, 0, 0)
+    Title.Size = UDim2.new(1, -(m.pad + m.logo + 6 + m.minBtn + 16), 1, 0)
     Title.TextSize = m.titleText
-    Subtitle.Position = UDim2.new(0, m.pad + m.logo + 6, 0, m.titleH - 18)
-    Subtitle.TextSize = m.subtitleText
     MinBtn.Size = UDim2.new(0, m.minBtn, 0, m.minBtn)
-    MinBtn.Position = UDim2.new(1, -(m.minBtn + 10), 0.5, -m.minBtn/2)
+    MinBtn.Position = UDim2.new(1, -(m.minBtn + 8), 0.5, -math.floor(m.minBtn / 2))
     MinBtn.TextSize = m.minText
-    Content.Position = UDim2.new(0, m.pad, 0, m.titleH + 4)
-    Content.Size = UDim2.new(1, -m.pad * 2, 1, -(m.titleH + 8))
-    StatusCard.Size = UDim2.new(1, 0, 0, m.statusH)
-    StatusLabel.TextSize = m.statusTitle
+    Content.Position = UDim2.new(0, m.pad, 0, m.titleH + 6)
+    Content.Size = UDim2.new(1, -m.pad * 2, 1, -(m.titleH + 10))
+    StatusBox.Size = UDim2.new(1, 0, 0, m.statusH)
+    StatusTitle.TextSize = m.statusTitle
     StatusText.TextSize = m.statusText
-    StatusText.Size = UDim2.new(1, -120, 0, m.statusH - 32)
-    StatusText.Position = UDim2.new(0, 32, 0, 28)
+    StatusText.Size = UDim2.new(1, -16, 0, m.statusH - 28)
+    StatusText.Position = UDim2.new(0, 8, 0, 20)
     ButtonFrame.Size = UDim2.new(1, 0, 0, m.btnH)
     ButtonFrame.Position = UDim2.new(0, 0, 0, m.statusH + 8)
     ScanBtn.TextSize = m.btnText
     DumpBtn.TextSize = m.btnText
     local logTop = m.statusH + 8 + m.btnH + 8
-    LogCard.Position = UDim2.new(0, 0, 0, logTop)
-    LogCard.Size = UDim2.new(1, 0, 1, -(logTop + m.discordH + 8))
-    LogText.TextSize = m.logText
+    LogBox.Position = UDim2.new(0, 0, 0, logTop)
+    LogBox.Size = UDim2.new(1, 0, 1, -(logTop + m.discordH + 8))
+    LogTitle.TextSize = m.statusTitle
+    LogText.TextSize = math.max(10, m.statusText - 1)
+    DiscordBtn.Size = UDim2.new(1, 0, 0, m.discordH)
+    DiscordBtn.Position = UDim2.new(0, 0, 1, -m.discordH)
     DiscordBtn.TextSize = m.discordText
-    FooterLabel.TextSize = m.discordText
     MiniFrame.Size = UDim2.new(0, m.mini, 0, m.mini)
     MiniLogo.Size = UDim2.new(0, m.mini - 16, 0, m.mini - 16)
-    MiniLogo.Position = UDim2.new(0.5, -(m.mini - 16)/2, 0.5, -(m.mini - 16)/2)
+    MiniLogo.Position = UDim2.new(0.5, -math.floor((m.mini - 16) / 2), 0.5, -math.floor((m.mini - 16) / 2))
 end
 
 task.spawn(function()
@@ -478,7 +635,6 @@ task.spawn(function()
     end
 end)
 
--- ===== DRAGGABLE =====
 local function makeDraggable(frame, handle)
     local dragging, dragStart, startPos
     handle.InputBegan:Connect(function(input)
@@ -500,10 +656,9 @@ local function makeDraggable(frame, handle)
         end
     end)
 end
-makeDraggable(Main, Header)
+makeDraggable(Main, TitleBar)
 makeDraggable(MiniFrame, MiniClick)
 
--- ===== TWEEN HELPERS =====
 local function tween(obj, props, duration, style, dir)
     local t = TweenService:Create(obj, TweenInfo.new(duration or 0.25, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out), props)
     t:Play()
@@ -515,13 +670,13 @@ local function pulseStroke(stroke)
     local t = 0
     pulseConn = RunService.RenderStepped:Connect(function(dt)
         t = t + dt
-        stroke.Transparency = 0.5 + math.sin(t * 3) * 0.25
+        stroke.Transparency = 0.35 + math.sin(t * 4) * 0.25
     end)
 end
 
 local function stopPulse()
     if pulseConn then pulseConn:Disconnect() pulseConn = nil end
-    BorderGlow.ImageTransparency = 0.6
+    MainStroke.Transparency = 0.35
 end
 
 local function updateStatus(text) StatusText.Text = text end
@@ -537,12 +692,12 @@ end
 local function setDumpEnabled(state)
     canDump = state
     if state then
-        DumpBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 80)
+        DumpBtn.BackgroundColor3 = Color3.fromRGB(40, 160, 90)
         DumpBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
         DumpBtn.Active = true
     else
-        DumpBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
-        DumpBtn.TextColor3 = Color3.fromRGB(130, 130, 160)
+        DumpBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+        DumpBtn.TextColor3 = Color3.fromRGB(130, 130, 145)
         DumpBtn.Active = false
     end
 end
@@ -555,31 +710,6 @@ local function setProgress(visible, scale)
         ProgressBar.Size = UDim2.new(0, 0, 1, 0)
     end
 end
-
--- ===== BUTTON ANIMATIONS =====
-local function safeButtonAnim(btn, normal, hover)
-    local originalSize = btn.Size
-    btn.MouseEnter:Connect(function()
-        if btn.Active ~= false then tween(btn, {BackgroundColor3 = hover}, 0.18) end
-    end)
-    btn.MouseLeave:Connect(function()
-        if btn.Active ~= false then tween(btn, {BackgroundColor3 = normal}, 0.18) end
-    end)
-    btn.MouseButton1Down:Connect(function()
-        tween(btn, {Size = UDim2.new(originalSize.X.Scale, originalSize.X.Offset - 4, originalSize.Y.Scale, originalSize.Y.Offset - 3)}, 0.08)
-    end)
-    btn.MouseButton1Up:Connect(function()
-        tween(btn, {Size = originalSize}, 0.12)
-    end)
-end
-
-safeButtonAnim(ScanBtn, Color3.fromRGB(0, 120, 70), Color3.fromRGB(0, 160, 90))
-safeButtonAnim(DiscordBtn, Color3.fromRGB(88, 101, 242), Color3.fromRGB(110, 125, 255))
-safeButtonAnim(MinBtn, Color3.fromRGB(30, 30, 40), Color3.fromRGB(50, 50, 65))
-
--- ============================================================
--- ===== SCAN SYSTEM (เหมือนเดิม ไม่ตัด ไม่ย่อ) =====
--- ============================================================
 
 local function sanitizeName(name)
     name = tostring(name or "unnamed")
@@ -621,7 +751,7 @@ local function getScriptSource(obj)
     return src
 end
 
-local function relativeUnderService(obj, serviceName)
+local function relativeUnderService(obj, serviceName, serviceInstance)
     local full = obj:GetFullName()
     local pattern = "^game%." .. serviceName .. "%.?"
     local rel = full:gsub(pattern, "")
@@ -675,6 +805,7 @@ local function deepWalk(obj, serviceName)
     if not obj then return end
     if ignoreNames[obj.Name] then return end
 
+    local classOk = true
     pcall(function()
         if obj:IsA("LocalScript") or obj:IsA("ModuleScript") or obj:IsA("Script") then
             extractScriptFile(obj, serviceName)
@@ -733,11 +864,11 @@ local function startScan()
     ensureDir(dumpRoot)
 
     ScanBtn.Text = "SCANNING..."
-    tween(ScanBtn, {BackgroundColor3 = Color3.fromRGB(50, 50, 70)}, 0.2)
+    tween(ScanBtn, {BackgroundColor3 = Color3.fromRGB(60, 60, 75)}, 0.2)
     LogText.Text = "• Scan started"
     updateStatus("Phase 1\nBuilding tree...")
     setProgress(true, 0.05)
-    pulseStroke(BorderGlow)
+    pulseStroke(MainStroke)
 
     task.spawn(function()
         local targets = {
@@ -799,7 +930,7 @@ local function startScan()
 
         isScanning = false
         ScanBtn.Text = "SCAN"
-        tween(ScanBtn, {BackgroundColor3 = Color3.fromRGB(0, 120, 70)}, 0.25)
+        tween(ScanBtn, {BackgroundColor3 = Color3.fromRGB(55, 115, 255)}, 0.25)
         setDumpEnabled(true)
         setProgress(true, 1)
         stopPulse()
@@ -818,7 +949,6 @@ local function doDump()
         return
     end
 
-    isDumping = true
     DumpBtn.Text = "WRITING..."
     DumpBtn.Active = false
     updateStatus("Writing files...\n0 / " .. #pendingWrites)
@@ -842,19 +972,35 @@ local function doDump()
         setProgress(false, 0)
         DumpBtn.Text = "DUMP"
         DumpBtn.Active = true
-        isDumping = false
         updateStatus("SUCCESS!\n" .. dumpRoot)
         addLog("Saved → " .. dumpRoot)
-        tween(BorderGlow, {ImageColor3 = Color3.fromRGB(0, 200, 100)}, 0.2)
-        tween(BorderGlow, {ImageTransparency = 0.3}, 0.2)
-        task.delay(1.5, function()
-            tween(BorderGlow, {ImageColor3 = Color3.fromRGB(0, 80, 50)}, 0.4)
-            tween(BorderGlow, {ImageTransparency = 0.6}, 0.4)
+        tween(MainStroke, {Color = Color3.fromRGB(40, 200, 100)}, 0.2)
+        task.delay(1.2, function()
+            tween(MainStroke, {Color = Color3.fromRGB(55, 90, 180)}, 0.4)
         end)
     end)
 end
 
--- ===== BUTTON CLICKS =====
+local function safeButtonAnim(btn, normal, hover)
+    local originalSize = btn.Size
+    btn.MouseEnter:Connect(function()
+        if btn.Active ~= false then tween(btn, {BackgroundColor3 = hover}, 0.18) end
+    end)
+    btn.MouseLeave:Connect(function()
+        if btn.Active ~= false then tween(btn, {BackgroundColor3 = normal}, 0.18) end
+    end)
+    btn.MouseButton1Down:Connect(function()
+        tween(btn, {Size = UDim2.new(originalSize.X.Scale, originalSize.X.Offset - 4, originalSize.Y.Scale, originalSize.Y.Offset - 3)}, 0.08)
+    end)
+    btn.MouseButton1Up:Connect(function()
+        tween(btn, {Size = originalSize}, 0.12)
+    end)
+end
+
+safeButtonAnim(ScanBtn, Color3.fromRGB(55, 115, 255), Color3.fromRGB(80, 140, 255))
+safeButtonAnim(DiscordBtn, Color3.fromRGB(88, 101, 242), Color3.fromRGB(110, 125, 255))
+safeButtonAnim(MinBtn, Color3.fromRGB(38, 38, 48), Color3.fromRGB(55, 55, 70))
+
 ScanBtn.MouseButton1Click:Connect(startScan)
 DumpBtn.MouseButton1Click:Connect(doDump)
 
@@ -862,7 +1008,7 @@ DiscordBtn.MouseButton1Click:Connect(function()
     if setclipboard then
         setclipboard(DISCORD_LINK)
         DiscordBtn.Text = "Copied!"
-        tween(DiscordBtn, {BackgroundColor3 = Color3.fromRGB(0, 180, 100)}, 0.2)
+        tween(DiscordBtn, {BackgroundColor3 = Color3.fromRGB(60, 180, 100)}, 0.2)
         task.delay(1.5, function()
             DiscordBtn.Text = "Copy Discord Invite"
             tween(DiscordBtn, {BackgroundColor3 = Color3.fromRGB(88, 101, 242)}, 0.25)
@@ -895,7 +1041,6 @@ MiniClick.MouseButton1Click:Connect(function()
     end)
 end)
 
--- ===== INITIAL ANIMATION =====
 Main.Size = UDim2.new(0, 0, 0, 0)
 Main.BackgroundTransparency = 1
 task.defer(function()
@@ -903,5 +1048,4 @@ task.defer(function()
     task.delay(0.46, applyLayout)
 end)
 
-print("[EgoHub v2.0] Dark Tech UI Loaded")
-print("[EgoHub v2.0] Scan/Dump system intact")
+print("[EgoHub] hierarchical dumper loaded with Anti-Cheat")
